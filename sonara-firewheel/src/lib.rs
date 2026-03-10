@@ -17,8 +17,8 @@ use firewheel_symphonium::load_audio_file;
 use sonara_build::BuildError;
 use sonara_model::{AudioAsset, Bank, Event, EventId, ParameterId, ParameterValue};
 use sonara_runtime::{
-    EmitterId, EventInstanceId, PlaybackPlan, RuntimeError, RuntimeRequest, RuntimeRequestResult,
-    SonaraRuntime,
+    AudioCommandBuffer, AudioCommandOutcome, EmitterId, EventInstanceId, PlaybackPlan,
+    RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -53,11 +53,8 @@ pub type FirewheelRequest = RuntimeRequest;
 pub type FirewheelRequestResult = RuntimeRequestResult;
 
 /// Firewheel backend 在隔离模式下处理单条请求后的结果
-#[derive(Debug)]
-pub struct FirewheelRequestOutcome {
-    pub request: FirewheelRequest,
-    pub result: Result<FirewheelRequestResult, FirewheelBackendError>,
-}
+pub type FirewheelRequestOutcome =
+    AudioCommandOutcome<FirewheelRequest, FirewheelRequestResult, FirewheelBackendError>;
 
 /// 基于 Firewheel 的最小 one-shot 播放后端
 pub struct FirewheelBackend {
@@ -65,7 +62,7 @@ pub struct FirewheelBackend {
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
-    pending_requests: Vec<FirewheelRequest>,
+    command_buffer: AudioCommandBuffer<FirewheelRequest>,
 }
 
 impl FirewheelBackend {
@@ -94,7 +91,7 @@ impl FirewheelBackend {
             context,
             sampler_pool,
             sample_resources: HashMap::new(),
-            pending_requests: Vec::new(),
+            command_buffer: AudioCommandBuffer::new(),
         })
     }
 
@@ -202,7 +199,7 @@ impl FirewheelBackend {
 
     /// 排队一个未绑定 emitter 的播放请求
     pub fn queue_play(&mut self, event_id: EventId) {
-        self.pending_requests
+        self.command_buffer
             .push(FirewheelRequest::Play { event_id });
     }
 
@@ -224,7 +221,7 @@ impl FirewheelBackend {
 
     /// 排队一个面向 emitter 的播放请求
     pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
-        self.pending_requests.push(FirewheelRequest::PlayOnEmitter {
+        self.command_buffer.push(FirewheelRequest::PlayOnEmitter {
             emitter_id,
             event_id,
         });
@@ -242,11 +239,10 @@ impl FirewheelBackend {
 
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
-        self.pending_requests
-            .push(FirewheelRequest::SetGlobalParam {
-                parameter_id,
-                value,
-            });
+        self.command_buffer.push(FirewheelRequest::SetGlobalParam {
+            parameter_id,
+            value,
+        });
     }
 
     /// 设置一个 emitter 参数
@@ -268,22 +264,21 @@ impl FirewheelBackend {
         parameter_id: ParameterId,
         value: ParameterValue,
     ) {
-        self.pending_requests
-            .push(FirewheelRequest::SetEmitterParam {
-                emitter_id,
-                parameter_id,
-                value,
-            });
+        self.command_buffer.push(FirewheelRequest::SetEmitterParam {
+            emitter_id,
+            parameter_id,
+            value,
+        });
     }
 
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<FirewheelRequest> {
-        self.pending_requests.drain(..).collect()
+        self.command_buffer.drain()
     }
 
     /// 依次执行所有待处理请求, 遇到第一条错误立即返回
     pub fn apply_requests(&mut self) -> Result<Vec<FirewheelRequestResult>, FirewheelBackendError> {
-        let requests = self.drain_requests();
+        let requests = self.command_buffer.drain();
         let mut results = Vec::with_capacity(requests.len());
 
         for request in requests {
@@ -295,7 +290,9 @@ impl FirewheelBackend {
 
     /// 依次执行所有待处理请求, 单条失败不会中断整批处理
     pub fn apply_requests_isolated(&mut self) -> Vec<FirewheelRequestOutcome> {
-        self.drain_requests()
+        let requests = self.command_buffer.drain();
+
+        requests
             .into_iter()
             .map(|request| {
                 let result = self.apply_request(&request);

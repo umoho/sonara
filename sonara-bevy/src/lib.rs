@@ -2,8 +2,8 @@
 
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{
-    EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeError, RuntimeRequest,
-    RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
+    AudioCommandBuffer, AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan,
+    RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
 
 /// Sonara 的 Bevy 插件入口
@@ -17,17 +17,13 @@ pub type AudioRequest = RuntimeRequest;
 pub type AudioRequestResult = RuntimeRequestResult;
 
 /// 一条请求在隔离执行模式下的结果
-#[derive(Debug)]
-pub struct AudioRequestOutcome {
-    pub request: AudioRequest,
-    pub result: Result<AudioRequestResult, RuntimeError>,
-}
+pub type AudioRequestOutcome = AudioCommandOutcome<AudioRequest, AudioRequestResult, RuntimeError>;
 
 /// Bevy 侧的全局音频入口
 #[derive(Debug, Default)]
 pub struct SonaraAudio {
     runtime: SonaraRuntime,
-    pending_requests: Vec<AudioRequest>,
+    command_buffer: AudioCommandBuffer<AudioRequest>,
 }
 
 impl SonaraAudio {
@@ -35,7 +31,7 @@ impl SonaraAudio {
     pub fn new() -> Self {
         Self {
             runtime: SonaraRuntime::new(),
-            pending_requests: Vec::new(),
+            command_buffer: AudioCommandBuffer::new(),
         }
     }
 
@@ -53,7 +49,7 @@ impl SonaraAudio {
 
     /// 排队一个未绑定 emitter 的播放请求
     pub fn queue_play(&mut self, event_id: EventId) {
-        self.pending_requests.push(AudioRequest::Play { event_id });
+        self.command_buffer.push(AudioRequest::Play { event_id });
     }
 
     /// 创建一个 emitter
@@ -94,7 +90,7 @@ impl SonaraAudio {
 
     /// 排队一个面向指定 emitter 的播放请求
     pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
-        self.pending_requests.push(AudioRequest::PlayOnEmitter {
+        self.command_buffer.push(AudioRequest::PlayOnEmitter {
             emitter_id,
             event_id,
         });
@@ -127,7 +123,7 @@ impl SonaraAudio {
 
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
-        self.pending_requests.push(AudioRequest::SetGlobalParam {
+        self.command_buffer.push(AudioRequest::SetGlobalParam {
             parameter_id,
             value,
         });
@@ -151,7 +147,7 @@ impl SonaraAudio {
         parameter_id: ParameterId,
         value: ParameterValue,
     ) {
-        self.pending_requests.push(AudioRequest::SetEmitterParam {
+        self.command_buffer.push(AudioRequest::SetEmitterParam {
             emitter_id,
             parameter_id,
             value,
@@ -188,31 +184,19 @@ impl SonaraAudio {
 
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
-        self.pending_requests.drain(..).collect()
+        self.command_buffer.drain()
     }
 
     /// 依次执行所有待处理请求
     pub fn apply_requests(&mut self) -> Result<Vec<AudioRequestResult>, RuntimeError> {
-        let requests = self.drain_requests();
-        let mut results = Vec::with_capacity(requests.len());
-
-        for request in requests {
-            let result = self.runtime.apply_request(&request)?;
-            results.push(result);
-        }
-
-        Ok(results)
+        self.command_buffer
+            .apply(|request| self.runtime.apply_request(request))
     }
 
     /// 依次执行所有待处理请求, 单条失败不会中断整批处理
     pub fn apply_requests_isolated(&mut self) -> Vec<AudioRequestOutcome> {
-        self.drain_requests()
-            .into_iter()
-            .map(|request| {
-                let result = self.runtime.apply_request(&request);
-                AudioRequestOutcome { request, result }
-            })
-            .collect()
+        self.command_buffer
+            .apply_isolated(|request| self.runtime.apply_request(request))
     }
 
     /// 停止一个事件实例

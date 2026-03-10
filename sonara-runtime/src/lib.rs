@@ -84,6 +84,89 @@ pub enum RuntimeRequestResult {
     ParameterSet,
 }
 
+/// 一组待执行的音频请求缓冲区
+#[derive(Debug)]
+pub struct AudioCommandBuffer<Request> {
+    requests: Vec<Request>,
+}
+
+impl<Request> Default for AudioCommandBuffer<Request> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<Request> AudioCommandBuffer<Request> {
+    /// 创建一个空缓冲区
+    pub fn new() -> Self {
+        Self {
+            requests: Vec::new(),
+        }
+    }
+
+    /// 追加一条请求
+    pub fn push(&mut self, request: Request) {
+        self.requests.push(request);
+    }
+
+    /// 取出当前所有待处理请求
+    pub fn drain(&mut self) -> Vec<Request> {
+        self.requests.drain(..).collect()
+    }
+
+    /// 当前缓冲区里的请求数量
+    pub fn len(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// 当前缓冲区是否为空
+    pub fn is_empty(&self) -> bool {
+        self.requests.is_empty()
+    }
+
+    /// 依次执行所有待处理请求, 遇到第一条错误立即返回
+    pub fn apply<Output, Error, Executor>(
+        &mut self,
+        mut executor: Executor,
+    ) -> Result<Vec<Output>, Error>
+    where
+        Executor: FnMut(&Request) -> Result<Output, Error>,
+    {
+        let requests = self.drain();
+        let mut results = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            results.push(executor(&request)?);
+        }
+
+        Ok(results)
+    }
+
+    /// 依次执行所有待处理请求, 单条失败不会中断整批处理
+    pub fn apply_isolated<Output, Error, Executor>(
+        &mut self,
+        mut executor: Executor,
+    ) -> Vec<AudioCommandOutcome<Request, Output, Error>>
+    where
+        Executor: FnMut(&Request) -> Result<Output, Error>,
+    {
+        self.drain()
+            .into_iter()
+            .map(|request| {
+                let result = executor(&request);
+                AudioCommandOutcome { request, result }
+            })
+            .collect()
+    }
+}
+
+/// 一条请求在隔离执行模式下的结果
+#[derive(Debug)]
+pub struct AudioCommandOutcome<Request, Output, Error> {
+    pub request: Request,
+    pub result: Result<Output, Error>,
+}
+
 /// 运行时错误
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -627,5 +710,41 @@ mod tests {
         let plan = runtime.plan_event(event_id).expect("plan should resolve");
 
         assert_eq!(plan.asset_ids, vec![asset_a, asset_b]);
+    }
+
+    #[test]
+    fn audio_command_buffer_applies_requests_in_order() {
+        let mut buffer = AudioCommandBuffer::new();
+        buffer.push(1);
+        buffer.push(2);
+
+        let results = buffer
+            .apply(|value| Ok::<_, ()>(value * 10))
+            .expect("apply should succeed");
+
+        assert_eq!(results, vec![10, 20]);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn audio_command_buffer_isolates_per_request_failures() {
+        let mut buffer = AudioCommandBuffer::new();
+        buffer.push(1);
+        buffer.push(2);
+        buffer.push(3);
+
+        let outcomes = buffer.apply_isolated(|value| {
+            if *value == 2 {
+                Err("boom")
+            } else {
+                Ok(value * 10)
+            }
+        });
+
+        assert_eq!(outcomes.len(), 3);
+        assert!(matches!(outcomes[0].result, Ok(10)));
+        assert!(matches!(outcomes[1].result, Err("boom")));
+        assert!(matches!(outcomes[2].result, Ok(30)));
+        assert!(buffer.is_empty());
     }
 }
