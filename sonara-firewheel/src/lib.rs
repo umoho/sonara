@@ -15,7 +15,9 @@ use firewheel::{
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
 use firewheel_symphonium::load_audio_file;
 use sonara_build::BuildError;
-use sonara_model::{AudioAsset, Bank, Event, EventId, ParameterId, ParameterValue};
+use sonara_model::{
+    AudioAsset, Bank, BankAsset, BankManifest, Event, EventId, ParameterId, ParameterValue,
+};
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
@@ -117,21 +119,42 @@ impl FirewheelBackend {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<(), FirewheelBackendError> {
-        // 先注册 bank 引用到的资源, 让后续 play 路径只消费已准备好的 SampleResource.
-        for asset in &bank.manifest.assets {
-            let audio_asset = AudioAsset {
-                id: asset.id,
-                name: asset.name.clone(),
-                source_path: asset.source_path.clone(),
-                import_settings: asset.import_settings.clone(),
-                streaming: asset.streaming,
-                loop_region: None,
-                analysis: None,
-            };
-            self.register_audio_asset(&audio_asset)?;
-        }
+        self.register_bank_manifest(&bank.manifest)?;
 
         self.runtime.load_bank(bank, events)?;
+        Ok(())
+    }
+
+    /// 注册一个 compiled bank manifest 引用到的所有资源。
+    pub fn register_bank_manifest(
+        &mut self,
+        manifest: &BankManifest,
+    ) -> Result<(), FirewheelBackendError> {
+        for asset in &manifest.assets {
+            self.register_bank_asset(asset)?;
+        }
+
+        Ok(())
+    }
+
+    /// 注册一个 compiled bank asset。
+    ///
+    /// 这条路径直接面向 bank 编译产物, 避免 backend 继续依赖 authoring 语义。
+    pub fn register_bank_asset(&mut self, asset: &BankAsset) -> Result<(), FirewheelBackendError> {
+        let mut loader = symphonium::SymphoniumLoader::new();
+        let target_sample_rate = asset
+            .import_settings
+            .target_sample_rate
+            .and_then(NonZeroU32::new);
+        let decoded = load_audio_file(
+            &mut loader,
+            asset.source_path.as_std_path(),
+            target_sample_rate,
+            symphonium::ResampleQuality::default(),
+        )
+        .map_err(|error| FirewheelBackendError::DecodeAsset(asset.id, error.to_string()))?;
+
+        self.register_sample_resource(asset.id, decoded.into());
         Ok(())
     }
 
@@ -174,21 +197,13 @@ impl FirewheelBackend {
         &mut self,
         asset: &AudioAsset,
     ) -> Result<(), FirewheelBackendError> {
-        let mut loader = symphonium::SymphoniumLoader::new();
-        let target_sample_rate = asset
-            .import_settings
-            .target_sample_rate
-            .and_then(NonZeroU32::new);
-        let decoded = load_audio_file(
-            &mut loader,
-            asset.source_path.as_std_path(),
-            target_sample_rate,
-            symphonium::ResampleQuality::default(),
-        )
-        .map_err(|error| FirewheelBackendError::DecodeAsset(asset.id, error.to_string()))?;
-
-        self.register_sample_resource(asset.id, decoded.into());
-        Ok(())
+        self.register_bank_asset(&BankAsset {
+            id: asset.id,
+            name: asset.name.clone(),
+            source_path: asset.source_path.clone(),
+            import_settings: asset.import_settings.clone(),
+            streaming: asset.streaming,
+        })
     }
 
     /// 播放一个未绑定实体的事件
