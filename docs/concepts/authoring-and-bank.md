@@ -120,10 +120,16 @@ compiled `Bank` 是运行时加载单元。
 
 1. 在 `AuthoringProject` 里组织 `assets/events/banks`
 2. 选择一个 `BankDefinition`
-3. 调用 `build_bank_from_definition(...)`
-4. 得到 compiled `Bank`
+3. 调用 `compile_bank_definition(...)` 或 `compile_bank_definition_to_file(...)`
+4. 得到 `CompiledBankPackage` 或写出 compiled bank JSON 文件
 5. runtime 消费 `Bank.objects`
 6. firewheel backend 消费 `Bank.manifest`
+
+当前推荐心智模型：
+
+- editor / authoring 工具读取 `AuthoringProject`
+- build 层把它导出成 compiled bank 文件
+- runtime 只读取 compiled bank 文件
 
 ## 当前边界结论
 

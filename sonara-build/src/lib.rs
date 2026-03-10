@@ -265,6 +265,19 @@ pub fn compile_bank_definition(
     })
 }
 
+/// 根据 authoring 项目里的 bank 定义编译并写出一份 compiled bank 文件。
+///
+/// 这条路径用于把 editor/authoring 层维护的 project 数据导出为 runtime 可直接加载的产物。
+pub fn compile_bank_definition_to_file(
+    definition: &BankDefinition,
+    project: &AuthoringProject,
+    output_path: impl AsRef<Path>,
+) -> Result<CompiledBankPackage, ExportBankError> {
+    let package = compile_bank_definition(definition, project)?;
+    package.write_json_file(output_path)?;
+    Ok(package)
+}
+
 /// 收集一个事件中所有被 `Sampler` 引用的资源 ID
 pub fn collect_event_asset_ids(event: &Event) -> HashSet<Uuid> {
     event
@@ -304,6 +317,15 @@ fn validate_ref_set(
     }
 
     Ok(())
+}
+
+/// compiled bank 导出阶段错误。
+#[derive(Debug, Error)]
+pub enum ExportBankError {
+    #[error(transparent)]
+    Build(#[from] BuildError),
+    #[error(transparent)]
+    File(#[from] CompiledBankFileError),
 }
 
 #[cfg(test)]
@@ -598,5 +620,37 @@ mod tests {
             .expect("compiled package should deserialize from JSON");
 
         assert_eq!(decoded.bank.name, "core");
+    }
+
+    #[test]
+    fn compile_bank_definition_to_file_writes_compiled_bank_json() {
+        let asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let sampler_id = NodeId::new();
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: asset.id,
+            })],
+            sampler_id,
+        );
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.events.push(event.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(event.id);
+
+        let output_path =
+            std::env::temp_dir().join(format!("sonara-compiled-bank-{}.json", Uuid::now_v7()));
+        let package = compile_bank_definition_to_file(&definition, &project, &output_path)
+            .expect("compiled bank export should succeed");
+        let decoded = CompiledBankPackage::read_json_file(&output_path)
+            .expect("exported compiled bank file should be readable");
+
+        assert_eq!(decoded.bank.id, package.bank.id);
+        assert_eq!(decoded.bank.name, "core");
+
+        std::fs::remove_file(output_path).expect("temp compiled bank file should be removed");
     }
 }
