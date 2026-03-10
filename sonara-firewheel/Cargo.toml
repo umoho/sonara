@@ -5,4 +5,9 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+firewheel.workspace = true
+firewheel-pool.workspace = true
+sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
+thiserror.workspace = true
+uuid.workspace = true
