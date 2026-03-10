@@ -169,6 +169,11 @@ impl SonaraAudio {
         self.queue_set_emitter_param(emitter_id, parameter_id, value);
     }
 
+    /// 排队一个停止实例请求
+    pub fn queue_stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
+        self.command_buffer.queue_stop(instance_id, fade);
+    }
+
     /// 读取一个事件实例当前解析出的播放计划
     pub fn active_plan(&self, instance_id: EventInstanceId) -> Option<&PlaybackPlan> {
         self.runtime.active_plan(instance_id)
@@ -391,5 +396,28 @@ mod tests {
             outcomes[1].result,
             Ok(AudioRequestResult::Played { .. })
         ));
+    }
+
+    #[test]
+    fn queued_stop_request_removes_active_instance() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let surface_id = ParameterId::new();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let instance_id = audio.play(event_id).expect("play should succeed");
+        audio.queue_stop(instance_id, Fade::IMMEDIATE);
+
+        let results = audio.apply_requests().expect("requests should apply");
+
+        assert_eq!(results, vec![AudioRequestResult::Stopped { instance_id }]);
+        assert_eq!(audio.active_plan(instance_id), None);
     }
 }

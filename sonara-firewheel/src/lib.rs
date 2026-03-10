@@ -268,6 +268,11 @@ impl FirewheelBackend {
             .queue_set_emitter_param(emitter_id, parameter_id, value);
     }
 
+    /// 排队一个停止实例请求
+    pub fn queue_stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
+        self.command_buffer.queue_stop(instance_id, fade);
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<FirewheelRequest> {
         self.command_buffer.drain()
@@ -343,6 +348,13 @@ impl FirewheelBackend {
         &mut self,
         request: &FirewheelRequest,
     ) -> Result<FirewheelRequestResult, FirewheelBackendError> {
+        if let FirewheelRequest::Stop { instance_id, fade } = request {
+            self.stop(*instance_id, *fade)?;
+            return Ok(FirewheelRequestResult::Stopped {
+                instance_id: *instance_id,
+            });
+        }
+
         let result = self.runtime.apply_request(request)?;
 
         if let FirewheelRequestResult::Played { instance_id } = result {

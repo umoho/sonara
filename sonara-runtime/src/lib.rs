@@ -75,12 +75,17 @@ pub enum RuntimeRequest {
         parameter_id: ParameterId,
         value: ParameterValue,
     },
+    Stop {
+        instance_id: EventInstanceId,
+        fade: Fade,
+    },
 }
 
 /// 运行时执行请求后的结果
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeRequestResult {
     Played { instance_id: EventInstanceId },
+    Stopped { instance_id: EventInstanceId },
     ParameterSet,
 }
 
@@ -197,6 +202,11 @@ impl RuntimeRequest {
             value,
         }
     }
+
+    /// 构造一个停止实例请求
+    pub fn stop(instance_id: EventInstanceId, fade: Fade) -> Self {
+        Self::Stop { instance_id, fade }
+    }
 }
 
 impl AudioCommandBuffer<RuntimeRequest> {
@@ -227,6 +237,11 @@ impl AudioCommandBuffer<RuntimeRequest> {
             parameter_id,
             value,
         ));
+    }
+
+    /// 排队一个停止实例请求
+    pub fn queue_stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
+        self.push(RuntimeRequest::stop(instance_id, fade));
     }
 }
 
@@ -459,6 +474,12 @@ impl SonaraRuntime {
             } => {
                 self.set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
                 Ok(RuntimeRequestResult::ParameterSet)
+            }
+            RuntimeRequest::Stop { instance_id, fade } => {
+                self.stop(*instance_id, *fade)?;
+                Ok(RuntimeRequestResult::Stopped {
+                    instance_id: *instance_id,
+                })
             }
         }
     }
@@ -816,5 +837,28 @@ mod tests {
         assert!(matches!(outcomes[1].result, Err("boom")));
         assert!(matches!(outcomes[2].result, Ok(30)));
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn stop_request_removes_active_instance() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let (sampler_id, sampler) = make_sampler(asset_id);
+        let event = make_event(event_id, sampler_id, vec![sampler]);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let instance_id = runtime.play(event_id).expect("event should play");
+        let result = runtime
+            .apply_request(&RuntimeRequest::stop(instance_id, Fade::IMMEDIATE))
+            .expect("stop should succeed");
+
+        assert_eq!(result, RuntimeRequestResult::Stopped { instance_id });
+        assert_eq!(runtime.active_plan(instance_id), None);
     }
 }
