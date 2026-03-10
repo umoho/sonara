@@ -59,12 +59,30 @@ impl Default for BankManifest {
     }
 }
 
+/// compiled bank 中的高层对象清单。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BankObjects {
+    pub events: Vec<EventId>,
+    pub buses: Vec<BusId>,
+    pub snapshots: Vec<SnapshotId>,
+}
+
+impl Default for BankObjects {
+    fn default() -> Self {
+        Self {
+            events: Vec::new(),
+            buses: Vec::new(),
+            snapshots: Vec::new(),
+        }
+    }
+}
+
 /// 运行时的 bank 加载单元
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bank {
     pub id: BankId,
     pub name: SmolStr,
-    pub events: Vec<EventId>,
+    pub objects: BankObjects,
     pub manifest: BankManifest,
 }
 
@@ -74,7 +92,7 @@ impl Bank {
         Self {
             id: BankId::new(),
             name: name.into(),
-            events: Vec::new(),
+            objects: BankObjects::default(),
             manifest: BankManifest::default(),
         }
     }

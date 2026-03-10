@@ -310,7 +310,7 @@ impl SonaraRuntime {
             .banks
             .remove(&bank_id)
             .ok_or(RuntimeError::BankNotLoaded(bank_id))?;
-        let event_ids = bank.events.clone();
+        let event_ids = bank.objects.events.clone();
 
         for event_id in &event_ids {
             self.events.remove(event_id);
@@ -642,7 +642,7 @@ mod tests {
         let (sampler_id, sampler) = make_sampler(asset_id);
         let event = make_event(event_id, sampler_id, vec![sampler]);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut runtime = SonaraRuntime::new();
         runtime
@@ -696,7 +696,7 @@ mod tests {
         );
 
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut runtime = SonaraRuntime::new();
         runtime
@@ -746,7 +746,7 @@ mod tests {
         );
 
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut runtime = SonaraRuntime::new();
         runtime
@@ -791,7 +791,7 @@ mod tests {
         );
 
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut runtime = SonaraRuntime::new();
         runtime
@@ -846,7 +846,7 @@ mod tests {
         let (sampler_id, sampler) = make_sampler(asset_id);
         let event = make_event(event_id, sampler_id, vec![sampler]);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut runtime = SonaraRuntime::new();
         runtime

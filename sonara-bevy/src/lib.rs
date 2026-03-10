@@ -558,7 +558,7 @@ mod tests {
         let asset_id = Uuid::now_v7();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut audio = SonaraAudio::new();
         audio
@@ -590,7 +590,7 @@ mod tests {
         let asset_id = Uuid::now_v7();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut audio = SonaraAudio::new();
         audio
@@ -624,7 +624,7 @@ mod tests {
         let surface_id = ParameterId::new();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut audio = SonaraAudio::new();
         audio
@@ -663,7 +663,7 @@ mod tests {
         let surface_id = ParameterId::new();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut audio = SonaraAudio::new();
         audio
@@ -686,7 +686,7 @@ mod tests {
         let asset_id = Uuid::now_v7();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut audio = SonaraAudio::new();
         audio
@@ -752,7 +752,7 @@ mod tests {
         let asset_id = Uuid::now_v7();
         let event = make_switch_event(event_id, surface_id, asset_id);
         let mut bank = Bank::new("core");
-        bank.events.push(event_id);
+        bank.objects.events.push(event_id);
 
         let mut app = App::new();
         app.add_plugins(SonaraPlugin);

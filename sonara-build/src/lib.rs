@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use smol_str::SmolStr;
 use sonara_model::{
     AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Event, EventContentNode,
-    EventId, NodeId, NodeRef, StreamingMode,
+    EventId, NodeId, NodeRef, SnapshotId, StreamingMode,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -29,6 +29,10 @@ pub enum BuildError {
     MissingAudioAsset,
     #[error("bank 定义引用了不存在的事件")]
     MissingEventDefinition,
+    #[error("bank 定义引用了不存在的 bus")]
+    MissingBusDefinition,
+    #[error("bank 定义引用了不存在的 snapshot")]
+    MissingSnapshotDefinition,
 }
 
 /// 对单个事件做最小语义校验
@@ -105,7 +109,7 @@ pub fn build_bank(
 
     for event in events {
         validate_event(event)?;
-        bank.events.push(event.id);
+        bank.objects.events.push(event.id);
 
         for asset_id in collect_event_asset_ids(event) {
             let asset = asset_by_id
@@ -157,6 +161,12 @@ pub fn build_bank_from_definition(
         .iter()
         .map(|event| (event.id, event))
         .collect();
+    let bus_ids: HashSet<_> = project.buses.iter().map(|bus| bus.id).collect();
+    let snapshot_ids: HashSet<SnapshotId> = project
+        .snapshots
+        .iter()
+        .map(|snapshot| snapshot.id)
+        .collect();
     let mut events = Vec::with_capacity(definition.events.len());
 
     for event_id in &definition.events {
@@ -166,8 +176,22 @@ pub fn build_bank_from_definition(
         events.push((*event).clone());
     }
 
+    for bus_id in &definition.buses {
+        if !bus_ids.contains(bus_id) {
+            return Err(BuildError::MissingBusDefinition);
+        }
+    }
+
+    for snapshot_id in &definition.snapshots {
+        if !snapshot_ids.contains(snapshot_id) {
+            return Err(BuildError::MissingSnapshotDefinition);
+        }
+    }
+
     let mut bank = build_bank(definition.name.clone(), &events, &project.assets)?;
     bank.id = definition.id;
+    bank.objects.buses = definition.buses.clone();
+    bank.objects.snapshots = definition.snapshots.clone();
     Ok(bank)
 }
 
@@ -319,7 +343,7 @@ mod tests {
         .expect("bank should build");
 
         assert_eq!(bank.name.as_str(), "core");
-        assert_eq!(bank.events.len(), 1);
+        assert_eq!(bank.objects.events.len(), 1);
         assert_eq!(bank.manifest.assets.len(), 2);
         assert_eq!(bank.manifest.resident_media, vec![resident_asset.id]);
         assert_eq!(bank.manifest.streaming_media, vec![streaming_asset.id]);
@@ -403,7 +427,7 @@ mod tests {
             .expect("bank should build from project");
 
         assert_eq!(bank.id, definition.id);
-        assert_eq!(bank.events, vec![selected_event.id]);
+        assert_eq!(bank.objects.events, vec![selected_event.id]);
         assert_eq!(bank.manifest.assets.len(), 1);
         assert_eq!(bank.manifest.assets[0].id, selected_asset.id);
     }
@@ -418,5 +442,30 @@ mod tests {
             build_bank_from_definition(&definition, &project),
             Err(BuildError::MissingEventDefinition)
         ));
+    }
+
+    #[test]
+    fn build_bank_from_definition_preserves_bus_and_snapshot_selection() {
+        let mut project = AuthoringProject::new("demo");
+        let bus = sonara_model::Bus::new("sfx");
+        let snapshot = sonara_model::Snapshot {
+            id: sonara_model::SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: Vec::new(),
+        };
+        project.buses.push(bus.clone());
+        project.snapshots.push(snapshot.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.buses.push(bus.id);
+        definition.snapshots.push(snapshot.id);
+
+        let bank = build_bank_from_definition(&definition, &project)
+            .expect("bank should build from project");
+
+        assert_eq!(bank.objects.buses, vec![bus.id]);
+        assert_eq!(bank.objects.snapshots, vec![snapshot.id]);
     }
 }
