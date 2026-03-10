@@ -1,14 +1,20 @@
+use std::{thread, time::Duration};
+
 use bevy_app::{App, Startup, Update};
-use bevy_ecs::prelude::{Commands, Query, Res, ResMut, Resource};
-use sonara_bevy::prelude::{AudioEmitter, SonaraAudio, SonaraPlugin};
+use bevy_ecs::prelude::{Commands, NonSend, NonSendMut, Query};
+use camino::Utf8PathBuf;
+use sonara_bevy::{
+    AudioRequestResult,
+    prelude::{AudioEmitter, SonaraAudio, SonaraFirewheelPlugin},
+};
+use sonara_build::build_bank;
 use sonara_model::{
-    Bank, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
+    AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
     ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
 };
-use sonara_runtime::{Fade, PlaybackPlan};
+use sonara_runtime::{EventInstanceId, Fade, PlaybackPlan};
 use uuid::Uuid;
 
-#[derive(Resource)]
 struct DemoIds {
     event_id: EventId,
     surface_id: ParameterId,
@@ -16,10 +22,10 @@ struct DemoIds {
     stone_asset: Uuid,
 }
 
-#[derive(Resource, Default)]
+#[derive(Default)]
 struct DemoState {
     frame: u32,
-    instance_id: Option<sonara_runtime::EventInstanceId>,
+    instance_id: Option<EventInstanceId>,
 }
 
 fn main() {
@@ -29,34 +35,42 @@ fn main() {
     let stone_asset = Uuid::now_v7();
 
     let mut app = App::new();
-    app.add_plugins(SonaraPlugin);
-    app.insert_resource(DemoIds {
+    app.add_plugins(SonaraFirewheelPlugin);
+    app.insert_non_send_resource(DemoIds {
         event_id,
         surface_id,
         wood_asset,
         stone_asset,
     });
-    app.insert_resource(DemoState::default());
+    app.insert_non_send_resource(DemoState::default());
     app.add_systems(Startup, setup_audio_demo);
     app.add_systems(Update, run_audio_demo);
 
     println!("Sonara Bevy example");
-    println!("this example runs real bevy_app/bevy_ecs integration");
-    println!("it resolves playback plans but does not start Firewheel audio output");
+    println!("this example runs real bevy_app/bevy_ecs + firewheel audio output");
 
-    for _ in 0..3 {
+    for _ in 0..6 {
         app.update();
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
 fn setup_audio_demo(
     mut commands: Commands,
-    mut audio: ResMut<SonaraAudio>,
-    demo_ids: Res<DemoIds>,
+    mut audio: NonSendMut<SonaraAudio>,
+    demo_ids: NonSend<DemoIds>,
 ) {
     let switch_id = NodeId::new();
     let wood_node_id = NodeId::new();
     let stone_node_id = NodeId::new();
+    let wood_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_wood.wav");
+    let stone_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_stone.wav");
+
+    let mut wood_audio_asset = AudioAsset::new("footstep_wood", wood_path);
+    wood_audio_asset.id = demo_ids.wood_asset;
+    let mut stone_audio_asset = AudioAsset::new("footstep_stone", stone_path);
+    stone_audio_asset.id = demo_ids.stone_asset;
+
     let event = Event {
         id: demo_ids.event_id,
         name: "player.footstep".into(),
@@ -96,19 +110,29 @@ fn setup_audio_demo(
         steal_policy: None,
     };
 
-    let mut bank = Bank::new("core");
-    bank.events.push(demo_ids.event_id);
+    let bank = build_bank(
+        "core",
+        &[event.clone()],
+        &[wood_audio_asset.clone(), stone_audio_asset.clone()],
+    )
+    .expect("bank should build");
+
     audio
         .load_bank(bank, vec![event])
         .expect("bank should load in startup system");
+
+    println!("wood file: {}", wood_audio_asset.source_path);
+    println!("stone file: {}", stone_audio_asset.source_path);
+    println!("wood asset: {:?}", demo_ids.wood_asset);
+    println!("stone asset: {:?}", demo_ids.stone_asset);
 
     commands.spawn(AudioEmitter::default());
 }
 
 fn run_audio_demo(
-    mut audio: ResMut<SonaraAudio>,
-    mut demo_state: ResMut<DemoState>,
-    demo_ids: Res<DemoIds>,
+    mut audio: NonSendMut<SonaraAudio>,
+    mut demo_state: NonSendMut<DemoState>,
+    demo_ids: NonSend<DemoIds>,
     mut emitters: Query<&mut AudioEmitter>,
 ) {
     let mut emitter = emitters.single_mut().expect("there should be one emitter");
@@ -127,7 +151,7 @@ fn run_audio_demo(
             };
 
             let instance_id = match results.last() {
-                Some(sonara_bevy::AudioRequestResult::Played { instance_id }) => *instance_id,
+                Some(AudioRequestResult::Played { instance_id }) => *instance_id,
                 other => panic!("expected played result, got {other:?}"),
             };
             demo_state.instance_id = Some(instance_id);
@@ -139,6 +163,9 @@ fn run_audio_demo(
             println!("frame 0 results: {:?}", results);
         }
         1 => {
+            println!("frame 1 letting firewheel play for another 100ms");
+        }
+        2 => {
             let instance_id = demo_state.instance_id.expect("instance should exist");
             let results = {
                 let mut update = audio.begin_update();
@@ -146,9 +173,9 @@ fn run_audio_demo(
                 update.apply().expect("stop update should apply")
             };
 
-            println!("frame 1 results: {:?}", results);
+            println!("frame 2 results: {:?}", results);
             println!(
-                "frame 1 active plan after stop: {:?}",
+                "frame 2 active plan after stop: {:?}",
                 audio.active_plan(instance_id)
             );
         }
