@@ -102,7 +102,7 @@ impl FirewheelBackend {
                 id: asset.id,
                 name: asset.name.clone(),
                 source_path: asset.source_path.clone(),
-                import_settings: Default::default(),
+                import_settings: asset.import_settings.clone(),
                 streaming: asset.streaming,
                 loop_region: None,
                 analysis: None,

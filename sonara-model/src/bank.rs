@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::{BankId, EventId, StreamingMode};
+use crate::{BankId, EventId, ImportSettings, StreamingMode};
 
 /// bank 中用于运行时加载资源的最小清单项
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,6 +11,7 @@ pub struct BankAsset {
     pub id: Uuid,
     pub name: SmolStr,
     pub source_path: Utf8PathBuf,
+    pub import_settings: ImportSettings,
     pub streaming: StreamingMode,
 }
 

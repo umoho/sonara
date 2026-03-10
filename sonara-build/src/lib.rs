@@ -118,6 +118,7 @@ pub fn build_bank(
                     id: asset.id,
                     name: asset.name.clone(),
                     source_path: asset.source_path.clone(),
+                    import_settings: asset.import_settings.clone(),
                     streaming: asset.streaming,
                 });
             }
@@ -291,8 +292,30 @@ mod tests {
 
         assert_eq!(bank.name.as_str(), "core");
         assert_eq!(bank.events.len(), 1);
+        assert_eq!(bank.assets.len(), 2);
         assert_eq!(bank.resident_media, vec![resident_asset.id]);
         assert_eq!(bank.streaming_media, vec![streaming_asset.id]);
+    }
+
+    #[test]
+    fn build_bank_preserves_asset_import_settings_in_manifest() {
+        let sampler_id = NodeId::new();
+        let mut asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        asset.import_settings.normalize = true;
+        asset.import_settings.target_sample_rate = Some(48_000);
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: asset.id,
+            })],
+            sampler_id,
+        );
+
+        let bank = build_bank("core", &[event], &[asset.clone()]).expect("bank should build");
+        let manifest_asset = bank.assets.first().expect("manifest asset should exist");
+
+        assert_eq!(manifest_asset.id, asset.id);
+        assert_eq!(manifest_asset.import_settings, asset.import_settings);
     }
 
     #[test]
