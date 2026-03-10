@@ -14,3 +14,6 @@ sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
 thiserror.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+bevy = "0.18.1"
