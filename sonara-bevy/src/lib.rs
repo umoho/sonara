@@ -2,7 +2,8 @@
 
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{
-    EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeError, SnapshotInstanceId, SonaraRuntime,
+    EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeError, RuntimeRequest,
+    RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
 
 /// Sonara 的 Bevy 插件入口
@@ -10,32 +11,10 @@ use sonara_runtime::{
 pub struct SonaraPlugin;
 
 /// Bevy 侧积累的一条音频请求
-#[derive(Debug, Clone, PartialEq)]
-pub enum AudioRequest {
-    Play {
-        event_id: EventId,
-    },
-    PlayOnEmitter {
-        emitter_id: EmitterId,
-        event_id: EventId,
-    },
-    SetGlobalParam {
-        parameter_id: ParameterId,
-        value: ParameterValue,
-    },
-    SetEmitterParam {
-        emitter_id: EmitterId,
-        parameter_id: ParameterId,
-        value: ParameterValue,
-    },
-}
+pub type AudioRequest = RuntimeRequest;
 
 /// 一次请求执行后的结果
-#[derive(Debug, Clone, PartialEq)]
-pub enum AudioRequestResult {
-    Played { instance_id: EventInstanceId },
-    ParameterSet,
-}
+pub type AudioRequestResult = RuntimeRequestResult;
 
 /// 一条请求在隔离执行模式下的结果
 #[derive(Debug)]
@@ -218,7 +197,7 @@ impl SonaraAudio {
         let mut results = Vec::with_capacity(requests.len());
 
         for request in requests {
-            let result = self.apply_request(&request)?;
+            let result = self.runtime.apply_request(&request)?;
             results.push(result);
         }
 
@@ -230,7 +209,7 @@ impl SonaraAudio {
         self.drain_requests()
             .into_iter()
             .map(|request| {
-                let result = self.apply_request(&request);
+                let result = self.runtime.apply_request(&request);
                 AudioRequestOutcome { request, result }
             })
             .collect()
@@ -248,40 +227,6 @@ impl SonaraAudio {
         fade: Fade,
     ) -> Result<SnapshotInstanceId, RuntimeError> {
         self.runtime.push_snapshot(snapshot_id, fade)
-    }
-
-    fn apply_request(
-        &mut self,
-        request: &AudioRequest,
-    ) -> Result<AudioRequestResult, RuntimeError> {
-        match request {
-            AudioRequest::Play { event_id } => Ok(AudioRequestResult::Played {
-                instance_id: self.runtime.play(*event_id)?,
-            }),
-            AudioRequest::PlayOnEmitter {
-                emitter_id,
-                event_id,
-            } => Ok(AudioRequestResult::Played {
-                instance_id: self.runtime.play_on(*emitter_id, *event_id)?,
-            }),
-            AudioRequest::SetGlobalParam {
-                parameter_id,
-                value,
-            } => {
-                self.runtime
-                    .set_global_param(*parameter_id, value.clone())?;
-                Ok(AudioRequestResult::ParameterSet)
-            }
-            AudioRequest::SetEmitterParam {
-                emitter_id,
-                parameter_id,
-                value,
-            } => {
-                self.runtime
-                    .set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
-                Ok(AudioRequestResult::ParameterSet)
-            }
-        }
     }
 }
 

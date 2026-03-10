@@ -15,8 +15,11 @@ use firewheel::{
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan};
 use firewheel_symphonium::load_audio_file;
 use sonara_build::BuildError;
-use sonara_model::{AudioAsset, Bank, Event, EventId};
-use sonara_runtime::{EmitterId, EventInstanceId, PlaybackPlan, RuntimeError, SonaraRuntime};
+use sonara_model::{AudioAsset, Bank, Event, EventId, ParameterId, ParameterValue};
+use sonara_runtime::{
+    EmitterId, EventInstanceId, PlaybackPlan, RuntimeError, RuntimeRequest, RuntimeRequestResult,
+    SonaraRuntime,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -44,32 +47,10 @@ pub enum FirewheelBackendError {
 }
 
 /// Firewheel backend 可消费的一条最小请求
-#[derive(Debug, Clone, PartialEq)]
-pub enum FirewheelRequest {
-    Play {
-        event_id: EventId,
-    },
-    PlayOnEmitter {
-        emitter_id: EmitterId,
-        event_id: EventId,
-    },
-    SetGlobalParam {
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
-    },
-    SetEmitterParam {
-        emitter_id: EmitterId,
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
-    },
-}
+pub type FirewheelRequest = RuntimeRequest;
 
 /// Firewheel backend 执行请求后的结果
-#[derive(Debug, Clone, PartialEq)]
-pub enum FirewheelRequestResult {
-    Played { instance_id: EventInstanceId },
-    ParameterSet,
-}
+pub type FirewheelRequestResult = RuntimeRequestResult;
 
 /// Firewheel backend 在隔离模式下处理单条请求后的结果
 #[derive(Debug)]
@@ -252,19 +233,15 @@ impl FirewheelBackend {
     /// 设置一个全局参数
     pub fn set_global_param(
         &mut self,
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
+        parameter_id: ParameterId,
+        value: ParameterValue,
     ) -> Result<(), FirewheelBackendError> {
         self.runtime.set_global_param(parameter_id, value)?;
         Ok(())
     }
 
     /// 排队一个全局参数更新请求
-    pub fn queue_set_global_param(
-        &mut self,
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
-    ) {
+    pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
         self.pending_requests
             .push(FirewheelRequest::SetGlobalParam {
                 parameter_id,
@@ -276,8 +253,8 @@ impl FirewheelBackend {
     pub fn set_emitter_param(
         &mut self,
         emitter_id: EmitterId,
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
+        parameter_id: ParameterId,
+        value: ParameterValue,
     ) -> Result<(), FirewheelBackendError> {
         self.runtime
             .set_emitter_param(emitter_id, parameter_id, value)?;
@@ -288,8 +265,8 @@ impl FirewheelBackend {
     pub fn queue_set_emitter_param(
         &mut self,
         emitter_id: EmitterId,
-        parameter_id: sonara_model::ParameterId,
-        value: sonara_model::ParameterValue,
+        parameter_id: ParameterId,
+        value: ParameterValue,
     ) {
         self.pending_requests
             .push(FirewheelRequest::SetEmitterParam {
@@ -340,31 +317,18 @@ impl FirewheelBackend {
         &mut self,
         request: &FirewheelRequest,
     ) -> Result<FirewheelRequestResult, FirewheelBackendError> {
-        match request {
-            FirewheelRequest::Play { event_id } => Ok(FirewheelRequestResult::Played {
-                instance_id: self.play(*event_id)?,
-            }),
-            FirewheelRequest::PlayOnEmitter {
-                emitter_id,
-                event_id,
-            } => Ok(FirewheelRequestResult::Played {
-                instance_id: self.play_on(*emitter_id, *event_id)?,
-            }),
-            FirewheelRequest::SetGlobalParam {
-                parameter_id,
-                value,
-            } => {
-                self.set_global_param(*parameter_id, value.clone())?;
-                Ok(FirewheelRequestResult::ParameterSet)
-            }
-            FirewheelRequest::SetEmitterParam {
-                emitter_id,
-                parameter_id,
-                value,
-            } => {
-                self.set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
-                Ok(FirewheelRequestResult::ParameterSet)
-            }
+        let result = self.runtime.apply_request(request)?;
+
+        if let FirewheelRequestResult::Played { instance_id } = result {
+            let plan = self
+                .runtime
+                .active_plan(instance_id)
+                .cloned()
+                .expect("active plan should exist right after play request");
+            self.playback_plan(&plan)?;
+            Ok(FirewheelRequestResult::Played { instance_id })
+        } else {
+            Ok(result)
         }
     }
 

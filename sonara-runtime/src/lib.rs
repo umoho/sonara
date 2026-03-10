@@ -56,6 +56,34 @@ pub struct ActiveEventInstance {
     pub plan: PlaybackPlan,
 }
 
+/// 运行时可消费的一条最小请求
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeRequest {
+    Play {
+        event_id: EventId,
+    },
+    PlayOnEmitter {
+        emitter_id: EmitterId,
+        event_id: EventId,
+    },
+    SetGlobalParam {
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    },
+    SetEmitterParam {
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    },
+}
+
+/// 运行时执行请求后的结果
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeRequestResult {
+    Played { instance_id: EventInstanceId },
+    ParameterSet,
+}
+
 /// 运行时错误
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -247,6 +275,39 @@ impl SonaraRuntime {
         _fade: Fade,
     ) -> Result<SnapshotInstanceId, RuntimeError> {
         Ok(SnapshotInstanceId(0))
+    }
+
+    /// 执行一条最小运行时请求
+    pub fn apply_request(
+        &mut self,
+        request: &RuntimeRequest,
+    ) -> Result<RuntimeRequestResult, RuntimeError> {
+        match request {
+            RuntimeRequest::Play { event_id } => Ok(RuntimeRequestResult::Played {
+                instance_id: self.play(*event_id)?,
+            }),
+            RuntimeRequest::PlayOnEmitter {
+                emitter_id,
+                event_id,
+            } => Ok(RuntimeRequestResult::Played {
+                instance_id: self.play_on(*emitter_id, *event_id)?,
+            }),
+            RuntimeRequest::SetGlobalParam {
+                parameter_id,
+                value,
+            } => {
+                self.set_global_param(*parameter_id, value.clone())?;
+                Ok(RuntimeRequestResult::ParameterSet)
+            }
+            RuntimeRequest::SetEmitterParam {
+                emitter_id,
+                parameter_id,
+                value,
+            } => {
+                self.set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
+                Ok(RuntimeRequestResult::ParameterSet)
+            }
+        }
     }
 
     fn play_internal(
