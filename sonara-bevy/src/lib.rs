@@ -19,6 +19,13 @@ pub type AudioRequestResult = RuntimeRequestResult;
 /// 一条请求在隔离执行模式下的结果
 pub type AudioRequestOutcome = AudioCommandOutcome<AudioRequest, AudioRequestResult, RuntimeError>;
 
+/// 一次 update system 内部使用的最小音频命令上下文。
+///
+/// 调用方可以在一帧里不断向它排队请求，最后统一 `apply()`。
+pub struct AudioUpdate<'a> {
+    audio: &'a mut SonaraAudio,
+}
+
 /// Bevy 侧的全局音频入口
 #[derive(Debug, Default)]
 pub struct SonaraAudio {
@@ -40,6 +47,11 @@ impl SonaraAudio {
     /// 这里先保留最小骨架, 后续会改成真正的加载流程
     pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
         self.runtime.load_bank(bank, events)
+    }
+
+    /// 开始一次 update system 风格的音频更新。
+    pub fn begin_update(&mut self) -> AudioUpdate<'_> {
+        AudioUpdate { audio: self }
     }
 
     /// 播放一个未绑定实体的事件
@@ -208,6 +220,59 @@ impl SonaraAudio {
         fade: Fade,
     ) -> Result<SnapshotInstanceId, RuntimeError> {
         self.runtime.push_snapshot(snapshot_id, fade)
+    }
+}
+
+impl AudioUpdate<'_> {
+    /// 确保一个发声体已经绑定到底层 runtime emitter。
+    pub fn ensure_emitter(&mut self, emitter: &mut AudioEmitter) -> EmitterId {
+        self.audio.ensure_emitter(emitter)
+    }
+
+    /// 释放一个发声体已绑定的 runtime emitter。
+    pub fn detach_emitter(&mut self, emitter: &mut AudioEmitter) -> Result<(), RuntimeError> {
+        self.audio.detach_emitter(emitter)
+    }
+
+    /// 在这一帧里排队一个全局播放请求。
+    pub fn play(&mut self, event_id: EventId) {
+        self.audio.queue_play(event_id);
+    }
+
+    /// 在这一帧里排队一个 emitter 播放请求。
+    pub fn play_from_emitter(&mut self, emitter: &mut AudioEmitter, event_id: EventId) {
+        self.audio.queue_play_from_emitter(emitter, event_id);
+    }
+
+    /// 在这一帧里排队一个全局参数更新。
+    pub fn set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
+        self.audio.queue_set_global_param(parameter_id, value);
+    }
+
+    /// 在这一帧里排队一个 emitter 参数更新。
+    pub fn set_emitter_param_on(
+        &mut self,
+        emitter: &mut AudioEmitter,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) {
+        self.audio
+            .queue_set_emitter_param_on(emitter, parameter_id, value);
+    }
+
+    /// 在这一帧里排队一个实例停止请求。
+    pub fn stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
+        self.audio.queue_stop(instance_id, fade);
+    }
+
+    /// 统一执行这一帧收集到的请求。
+    pub fn apply(self) -> Result<Vec<AudioRequestResult>, RuntimeError> {
+        self.audio.apply_requests()
+    }
+
+    /// 统一执行这一帧收集到的请求, 单条失败不会中断整批。
+    pub fn apply_isolated(self) -> Vec<AudioRequestOutcome> {
+        self.audio.apply_requests_isolated()
     }
 }
 
@@ -419,5 +484,42 @@ mod tests {
 
         assert_eq!(results, vec![AudioRequestResult::Stopped { instance_id }]);
         assert_eq!(audio.active_plan(instance_id), None);
+    }
+
+    #[test]
+    fn update_context_batches_emitter_commands_and_applies_them() {
+        let surface_id = ParameterId::new();
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let mut emitter = AudioEmitter::default();
+        let results = {
+            let mut update = audio.begin_update();
+            update.set_emitter_param_on(
+                &mut emitter,
+                surface_id,
+                ParameterValue::Enum("stone".into()),
+            );
+            update.play_from_emitter(&mut emitter, event_id);
+            update.apply().expect("update should apply")
+        };
+
+        let instance_id = match results.last() {
+            Some(AudioRequestResult::Played { instance_id }) => *instance_id,
+            other => panic!("expected final played result, got {other:?}"),
+        };
+        let plan = audio.active_plan(instance_id).expect("plan should exist");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(plan.emitter_id, emitter.id);
+        assert_eq!(plan.asset_ids, vec![asset_id]);
     }
 }
