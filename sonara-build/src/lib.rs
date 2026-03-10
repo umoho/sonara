@@ -2,8 +2,13 @@
 //!
 //! 这一层负责 authoring 数据校验和 bank 构建
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use sonara_model::{
     AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Event, EventContentNode,
@@ -35,16 +40,50 @@ pub enum BuildError {
     MissingSnapshotDefinition,
 }
 
+/// compiled bank 文件的最小 IO 错误。
+#[derive(Debug, Error)]
+pub enum CompiledBankFileError {
+    #[error("读取 compiled bank 文件失败: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("compiled bank JSON 解析失败: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
 /// 一次 bank 编译后的最小载荷。
 ///
 /// 它把 runtime/backend 加载一个 compiled bank 所需的高层对象定义放在一起，
 /// 便于后续从文件读取后直接进入加载流程。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBankPackage {
     pub bank: Bank,
     pub events: Vec<Event>,
     pub buses: Vec<Bus>,
     pub snapshots: Vec<Snapshot>,
+}
+
+impl CompiledBankPackage {
+    /// 从 JSON 字符串读取 compiled bank 载荷。
+    pub fn from_json_str(contents: &str) -> Result<Self, CompiledBankFileError> {
+        Ok(serde_json::from_str(contents)?)
+    }
+
+    /// 把 compiled bank 载荷编码成格式化 JSON。
+    pub fn to_json_string_pretty(&self) -> Result<String, CompiledBankFileError> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+
+    /// 从磁盘读取一个 JSON compiled bank 文件。
+    pub fn read_json_file(path: impl AsRef<Path>) -> Result<Self, CompiledBankFileError> {
+        let contents = fs::read_to_string(path)?;
+        Self::from_json_str(&contents)
+    }
+
+    /// 把 compiled bank 载荷写到磁盘上的 JSON 文件。
+    pub fn write_json_file(&self, path: impl AsRef<Path>) -> Result<(), CompiledBankFileError> {
+        let contents = self.to_json_string_pretty()?;
+        fs::write(path, contents)?;
+        Ok(())
+    }
 }
 
 /// 对单个事件做最小语义校验
@@ -541,5 +580,23 @@ mod tests {
         assert_eq!(package.events, vec![selected_event]);
         assert_eq!(package.buses, vec![bus]);
         assert_eq!(package.snapshots, vec![snapshot]);
+    }
+
+    #[test]
+    fn compiled_bank_package_json_round_trip_preserves_bank_name() {
+        let package = CompiledBankPackage {
+            bank: Bank::new("core"),
+            events: Vec::new(),
+            buses: Vec::new(),
+            snapshots: Vec::new(),
+        };
+
+        let json = package
+            .to_json_string_pretty()
+            .expect("compiled package should serialize");
+        let decoded = CompiledBankPackage::from_json_str(&json)
+            .expect("compiled package should deserialize from JSON");
+
+        assert_eq!(decoded.bank.name, "core");
     }
 }

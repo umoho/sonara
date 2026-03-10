@@ -5,6 +5,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 sonara-model = { path = "../sonara-model" }
 smol_str.workspace = true
 thiserror.workspace = true

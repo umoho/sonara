@@ -4871,6 +4871,8 @@ name = "sonara-build"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "serde",
+ "serde_json",
  "smol_str 0.3.6",
  "sonara-model",
  "thiserror 2.0.18",

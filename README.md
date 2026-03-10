@@ -57,8 +57,7 @@ cargo run -p sonara-app
 
 这个 demo 会：
 
-- 从 `sonara-app/assets/demo/project.json` 读取最小 authoring project
-- 编译其中的 `core` bank
+- 从 `sonara-app/assets/demo/core.bank.json` 读取 compiled bank
 - 加载仓库内 wav 资源
 - 创建 emitter
 - 设置 `surface = stone`

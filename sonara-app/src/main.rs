@@ -1,20 +1,24 @@
 use std::{thread, time::Duration};
 
-use sonara_build::compile_bank_definition;
+use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelRequestResult};
-use sonara_model::{AuthoringProject, ParameterValue};
+use sonara_model::ParameterValue;
 use sonara_runtime::Fade;
 
 fn main() {
-    let project = AuthoringProject::read_json_file("sonara-app/assets/demo/project.json")
-        .expect("demo project should load from JSON");
-    let bank_definition = project
-        .bank_named("core")
-        .expect("demo project should contain core bank");
-    let package =
-        compile_bank_definition(bank_definition, &project).expect("demo project should compile");
-    let event_id = package.events[0].id;
-    let surface_id = project.parameters[0].id();
+    let package = CompiledBankPackage::read_json_file("sonara-app/assets/demo/core.bank.json")
+        .expect("compiled demo bank should load from JSON");
+    let event_id = package
+        .events
+        .iter()
+        .find(|event| event.name == "player.footstep")
+        .map(|event| event.id)
+        .expect("compiled bank should contain player.footstep event");
+    let surface_id = package
+        .events
+        .iter()
+        .find_map(|event| event.default_parameters.first().copied())
+        .expect("compiled footstep event should reference a surface parameter");
     let wood_asset = package.bank.manifest.assets[0].id;
     let stone_asset = package.bank.manifest.assets[1].id;
     let wood_path = package.bank.manifest.assets[0].source_path.clone();
@@ -50,7 +54,7 @@ fn main() {
     println!("Sonara demo");
     println!("event: player.footstep");
     println!("emitter: {:?}", plan.emitter_id);
-    println!("project file: sonara-app/assets/demo/project.json");
+    println!("compiled bank file: sonara-app/assets/demo/core.bank.json");
     println!("surface param: stone");
     println!("wood file: {}", wood_path);
     println!("stone file: {}", stone_path);

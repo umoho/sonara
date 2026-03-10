@@ -1,0 +1,100 @@
+{
+  "bank": {
+    "id": "01957a9e-42f2-7000-8000-000000000501",
+    "name": "core",
+    "objects": {
+      "events": [
+        "01957a9e-42f2-7000-8000-000000000301"
+      ],
+      "buses": [],
+      "snapshots": []
+    },
+    "manifest": {
+      "assets": [
+        {
+          "id": "01957a9e-42f2-7000-8000-000000000101",
+          "name": "footstep_wood",
+          "source_path": "sonara-app/assets/demo/footstep_wood.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "01957a9e-42f2-7000-8000-000000000102",
+          "name": "footstep_stone",
+          "source_path": "sonara-app/assets/demo/footstep_stone.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        }
+      ],
+      "resident_media": [
+        "01957a9e-42f2-7000-8000-000000000101",
+        "01957a9e-42f2-7000-8000-000000000102"
+      ],
+      "streaming_media": []
+    }
+  },
+  "events": [
+    {
+      "id": "01957a9e-42f2-7000-8000-000000000301",
+      "name": "player.footstep",
+      "kind": "OneShot",
+      "root": {
+        "root": {
+          "id": "01957a9e-42f2-7000-8000-000000000401"
+        },
+        "nodes": [
+          {
+            "Switch": {
+              "id": "01957a9e-42f2-7000-8000-000000000401",
+              "parameter_id": "01957a9e-42f2-7000-8000-000000000201",
+              "cases": [
+                {
+                  "variant": "wood",
+                  "child": {
+                    "id": "01957a9e-42f2-7000-8000-000000000402"
+                  }
+                },
+                {
+                  "variant": "stone",
+                  "child": {
+                    "id": "01957a9e-42f2-7000-8000-000000000403"
+                  }
+                }
+              ],
+              "default_case": {
+                "id": "01957a9e-42f2-7000-8000-000000000402"
+              }
+            }
+          },
+          {
+            "Sampler": {
+              "id": "01957a9e-42f2-7000-8000-000000000402",
+              "asset_id": "01957a9e-42f2-7000-8000-000000000101"
+            }
+          },
+          {
+            "Sampler": {
+              "id": "01957a9e-42f2-7000-8000-000000000403",
+              "asset_id": "01957a9e-42f2-7000-8000-000000000102"
+            }
+          }
+        ]
+      },
+      "default_bus": null,
+      "spatial": "ThreeD",
+      "default_parameters": [
+        "01957a9e-42f2-7000-8000-000000000201"
+      ],
+      "voice_limit": null,
+      "steal_policy": null
+    }
+  ],
+  "buses": [],
+  "snapshots": []
+}
