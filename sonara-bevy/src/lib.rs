@@ -5,7 +5,7 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{
-    AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
+    AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
 use thiserror::Error;
@@ -63,10 +63,7 @@ pub struct AudioUpdate<'a> {
 }
 
 enum SonaraBackend {
-    Runtime {
-        runtime: SonaraRuntime,
-        command_buffer: RuntimeCommandBuffer,
-    },
+    Runtime(QueuedRuntime),
     Firewheel(FirewheelBackend),
 }
 
@@ -85,10 +82,7 @@ impl SonaraAudio {
     /// 创建一个新的纯 runtime 音频入口。
     pub fn new() -> Self {
         Self {
-            backend: SonaraBackend::Runtime {
-                runtime: SonaraRuntime::new(),
-                command_buffer: RuntimeCommandBuffer::new(),
-            },
+            backend: SonaraBackend::Runtime(QueuedRuntime::new()),
         }
     }
 
@@ -113,7 +107,7 @@ impl SonaraAudio {
         let bank_id = bank.id;
 
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => {
+            SonaraBackend::Runtime(runtime) => {
                 runtime.load_bank(bank, events)?;
             }
             SonaraBackend::Firewheel(backend) => {
@@ -132,7 +126,7 @@ impl SonaraAudio {
     /// 在 Firewheel 模式下推进真实音频后端。
     pub fn update_backend(&mut self) -> Result<(), AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { .. } => Ok(()),
+            SonaraBackend::Runtime(_) => Ok(()),
             SonaraBackend::Firewheel(backend) => {
                 backend.update()?;
                 Ok(())
@@ -143,7 +137,7 @@ impl SonaraAudio {
     /// 播放一个未绑定实体的事件
     pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => Ok(runtime.play(event_id)?),
+            SonaraBackend::Runtime(runtime) => Ok(runtime.play(event_id)?),
             SonaraBackend::Firewheel(backend) => Ok(backend.play(event_id)?),
         }
     }
@@ -151,7 +145,7 @@ impl SonaraAudio {
     /// 排队一个未绑定 emitter 的播放请求
     pub fn queue_play(&mut self, event_id: EventId) {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => command_buffer.queue_play(event_id),
+            SonaraBackend::Runtime(runtime) => runtime.queue_play(event_id),
             SonaraBackend::Firewheel(backend) => backend.queue_play(event_id),
         }
     }
@@ -188,7 +182,7 @@ impl SonaraAudio {
         event_id: EventId,
     ) -> Result<EventInstanceId, AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => Ok(runtime.play_on(emitter_id, event_id)?),
+            SonaraBackend::Runtime(runtime) => Ok(runtime.play_on(emitter_id, event_id)?),
             SonaraBackend::Firewheel(backend) => Ok(backend.play_on(emitter_id, event_id)?),
         }
     }
@@ -196,9 +190,7 @@ impl SonaraAudio {
     /// 排队一个面向指定 emitter 的播放请求
     pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => {
-                command_buffer.queue_play_on(emitter_id, event_id);
-            }
+            SonaraBackend::Runtime(runtime) => runtime.queue_play_on(emitter_id, event_id),
             SonaraBackend::Firewheel(backend) => backend.queue_play_on(emitter_id, event_id),
         }
     }
@@ -226,9 +218,7 @@ impl SonaraAudio {
         value: ParameterValue,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => {
-                runtime.set_global_param(parameter_id, value)?;
-            }
+            SonaraBackend::Runtime(runtime) => runtime.set_global_param(parameter_id, value)?,
             SonaraBackend::Firewheel(backend) => {
                 backend.set_global_param(parameter_id, value)?;
             }
@@ -240,9 +230,7 @@ impl SonaraAudio {
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => {
-                command_buffer.queue_set_global_param(parameter_id, value);
-            }
+            SonaraBackend::Runtime(runtime) => runtime.queue_set_global_param(parameter_id, value),
             SonaraBackend::Firewheel(backend) => {
                 backend.queue_set_global_param(parameter_id, value)
             }
@@ -257,7 +245,7 @@ impl SonaraAudio {
         value: ParameterValue,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => {
+            SonaraBackend::Runtime(runtime) => {
                 runtime.set_emitter_param(emitter_id, parameter_id, value)?;
             }
             SonaraBackend::Firewheel(backend) => {
@@ -276,8 +264,8 @@ impl SonaraAudio {
         value: ParameterValue,
     ) {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => {
-                command_buffer.queue_set_emitter_param(emitter_id, parameter_id, value);
+            SonaraBackend::Runtime(runtime) => {
+                runtime.queue_set_emitter_param(emitter_id, parameter_id, value);
             }
             SonaraBackend::Firewheel(backend) => {
                 backend.queue_set_emitter_param(emitter_id, parameter_id, value);
@@ -310,9 +298,7 @@ impl SonaraAudio {
     /// 排队一个停止实例请求
     pub fn queue_stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => {
-                command_buffer.queue_stop(instance_id, fade)
-            }
+            SonaraBackend::Runtime(runtime) => runtime.queue_stop(instance_id, fade),
             SonaraBackend::Firewheel(backend) => backend.queue_stop(instance_id, fade),
         }
     }
@@ -325,7 +311,7 @@ impl SonaraAudio {
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {
-            SonaraBackend::Runtime { command_buffer, .. } => command_buffer.drain(),
+            SonaraBackend::Runtime(runtime) => runtime.drain_requests(),
             SonaraBackend::Firewheel(backend) => backend.drain_requests(),
         }
     }
@@ -333,10 +319,7 @@ impl SonaraAudio {
     /// 依次执行所有待处理请求
     pub fn apply_requests(&mut self) -> Result<Vec<AudioRequestResult>, AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime {
-                runtime,
-                command_buffer,
-            } => Ok(command_buffer.apply(|request| runtime.apply_request(request))?),
+            SonaraBackend::Runtime(runtime) => Ok(runtime.apply_requests()?),
             SonaraBackend::Firewheel(backend) => Ok(backend.apply_requests()?),
         }
     }
@@ -344,11 +327,14 @@ impl SonaraAudio {
     /// 依次执行所有待处理请求, 单条失败不会中断整批处理
     pub fn apply_requests_isolated(&mut self) -> Vec<AudioRequestOutcome> {
         match &mut self.backend {
-            SonaraBackend::Runtime {
-                runtime,
-                command_buffer,
-            } => command_buffer
-                .apply_isolated(|request| runtime.apply_request(request).map_err(Into::into)),
+            SonaraBackend::Runtime(runtime) => runtime
+                .apply_requests_isolated()
+                .into_iter()
+                .map(|outcome| AudioRequestOutcome {
+                    request: outcome.request,
+                    result: outcome.result.map_err(Into::into),
+                })
+                .collect(),
             SonaraBackend::Firewheel(backend) => backend
                 .apply_requests_isolated()
                 .into_iter()
@@ -367,7 +353,7 @@ impl SonaraAudio {
         fade: Fade,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => runtime.stop(instance_id, fade)?,
+            SonaraBackend::Runtime(runtime) => runtime.stop(instance_id, fade)?,
             SonaraBackend::Firewheel(backend) => backend.stop(instance_id, fade)?,
         }
 
@@ -385,14 +371,14 @@ impl SonaraAudio {
 
     fn runtime(&self) -> &SonaraRuntime {
         match &self.backend {
-            SonaraBackend::Runtime { runtime, .. } => runtime,
+            SonaraBackend::Runtime(runtime) => runtime.runtime(),
             SonaraBackend::Firewheel(backend) => backend.runtime(),
         }
     }
 
     fn runtime_mut(&mut self) -> &mut SonaraRuntime {
         match &mut self.backend {
-            SonaraBackend::Runtime { runtime, .. } => runtime,
+            SonaraBackend::Runtime(runtime) => runtime.runtime_mut(),
             SonaraBackend::Firewheel(backend) => backend.runtime_mut(),
         }
     }

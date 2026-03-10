@@ -92,6 +92,15 @@ pub enum RuntimeRequestResult {
 /// 默认使用的运行时命令缓冲区类型
 pub type RuntimeCommandBuffer = AudioCommandBuffer<RuntimeRequest>;
 
+/// 带请求队列的纯 runtime 前端。
+///
+/// 这个类型适合不直接绑定真实音频后端, 但又希望复用统一请求模型的调用方。
+#[derive(Debug, Default)]
+pub struct QueuedRuntime {
+    runtime: SonaraRuntime,
+    command_buffer: RuntimeCommandBuffer,
+}
+
 /// 一组待执行的音频请求缓冲区
 #[derive(Debug)]
 pub struct AudioCommandBuffer<Request> {
@@ -101,6 +110,142 @@ pub struct AudioCommandBuffer<Request> {
 impl<Request> Default for AudioCommandBuffer<Request> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl QueuedRuntime {
+    /// 创建一个空的 queued runtime。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 读取内部 runtime。
+    pub fn runtime(&self) -> &SonaraRuntime {
+        &self.runtime
+    }
+
+    /// 读取内部 runtime 的可变引用。
+    pub fn runtime_mut(&mut self) -> &mut SonaraRuntime {
+        &mut self.runtime
+    }
+
+    /// 加载一个 bank。
+    pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
+        self.runtime.load_bank(bank, events)
+    }
+
+    /// 播放一个未绑定 emitter 的事件。
+    pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
+        self.runtime.play(event_id)
+    }
+
+    /// 在指定 emitter 上播放事件。
+    pub fn play_on(
+        &mut self,
+        emitter_id: EmitterId,
+        event_id: EventId,
+    ) -> Result<EventInstanceId, RuntimeError> {
+        self.runtime.play_on(emitter_id, event_id)
+    }
+
+    /// 设置一个全局参数。
+    pub fn set_global_param(
+        &mut self,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) -> Result<(), RuntimeError> {
+        self.runtime.set_global_param(parameter_id, value)
+    }
+
+    /// 设置一个 emitter 参数。
+    pub fn set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) -> Result<(), RuntimeError> {
+        self.runtime
+            .set_emitter_param(emitter_id, parameter_id, value)
+    }
+
+    /// 停止一个事件实例。
+    pub fn stop(&mut self, instance_id: EventInstanceId, fade: Fade) -> Result<(), RuntimeError> {
+        self.runtime.stop(instance_id, fade)
+    }
+
+    /// 压入一个 snapshot。
+    pub fn push_snapshot(
+        &mut self,
+        snapshot_id: SnapshotId,
+        fade: Fade,
+    ) -> Result<SnapshotInstanceId, RuntimeError> {
+        self.runtime.push_snapshot(snapshot_id, fade)
+    }
+
+    /// 创建一个 emitter。
+    pub fn create_emitter(&mut self) -> EmitterId {
+        self.runtime.create_emitter()
+    }
+
+    /// 删除一个 emitter。
+    pub fn remove_emitter(&mut self, emitter_id: EmitterId) -> Result<(), RuntimeError> {
+        self.runtime.remove_emitter(emitter_id)
+    }
+
+    /// 读取当前活动实例的播放计划。
+    pub fn active_plan(&self, instance_id: EventInstanceId) -> Option<&PlaybackPlan> {
+        self.runtime.active_plan(instance_id)
+    }
+
+    /// 取出当前待处理请求。
+    pub fn drain_requests(&mut self) -> Vec<RuntimeRequest> {
+        self.command_buffer.drain()
+    }
+
+    /// 排队一个播放请求。
+    pub fn queue_play(&mut self, event_id: EventId) {
+        self.command_buffer.queue_play(event_id);
+    }
+
+    /// 排队一个 emitter 播放请求。
+    pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
+        self.command_buffer.queue_play_on(emitter_id, event_id);
+    }
+
+    /// 排队一个全局参数更新请求。
+    pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
+        self.command_buffer
+            .queue_set_global_param(parameter_id, value);
+    }
+
+    /// 排队一个 emitter 参数更新请求。
+    pub fn queue_set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) {
+        self.command_buffer
+            .queue_set_emitter_param(emitter_id, parameter_id, value);
+    }
+
+    /// 排队一个停止请求。
+    pub fn queue_stop(&mut self, instance_id: EventInstanceId, fade: Fade) {
+        self.command_buffer.queue_stop(instance_id, fade);
+    }
+
+    /// 执行所有已排队请求。
+    pub fn apply_requests(&mut self) -> Result<Vec<RuntimeRequestResult>, RuntimeError> {
+        self.command_buffer
+            .apply(|request| self.runtime.apply_request(request))
+    }
+
+    /// 以隔离模式执行所有已排队请求。
+    pub fn apply_requests_isolated(
+        &mut self,
+    ) -> Vec<AudioCommandOutcome<RuntimeRequest, RuntimeRequestResult, RuntimeError>> {
+        self.command_buffer
+            .apply_isolated(|request| self.runtime.apply_request(request))
     }
 }
 
@@ -885,5 +1030,35 @@ mod tests {
             .expect("loaded bank objects should exist");
 
         assert_eq!(objects.events, vec![event_id]);
+    }
+
+    #[test]
+    fn queued_runtime_applies_buffered_requests_against_runtime_state() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let (sampler_id, sampler) = make_sampler(asset_id);
+        let event = make_event(event_id, sampler_id, vec![sampler]);
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+
+        let mut queued = QueuedRuntime::new();
+        queued
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+        queued.queue_play(event_id);
+
+        let results = queued
+            .apply_requests()
+            .expect("queued requests should apply");
+
+        let instance_id = match results.last() {
+            Some(RuntimeRequestResult::Played { instance_id }) => *instance_id,
+            other => panic!("expected final played result, got {other:?}"),
+        };
+
+        assert_eq!(
+            queued.active_plan(instance_id).map(|plan| &plan.asset_ids),
+            Some(&vec![asset_id])
+        );
     }
 }
