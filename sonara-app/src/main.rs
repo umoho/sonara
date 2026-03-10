@@ -85,10 +85,19 @@ fn main() {
         .runtime()
         .active_plan(instance_id)
         .expect("active plan should exist");
+    let resolved_label = match plan.asset_ids.as_slice() {
+        [asset_id] if *asset_id == wood_asset => "wood",
+        [asset_id] if *asset_id == stone_asset => "stone",
+        _ => "unknown",
+    };
 
     println!("Sonara demo");
     println!("event: player.footstep");
     println!("emitter: {:?}", plan.emitter_id);
+    println!("surface param: stone");
+    println!("wood asset: {:?}", wood_asset);
+    println!("stone asset: {:?}", stone_asset);
+    println!("resolved branch: {resolved_label}");
     println!("resolved assets: {:?}", plan.asset_ids);
     println!("playing for 2 seconds...");
 
