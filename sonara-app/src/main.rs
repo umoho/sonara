@@ -2,7 +2,7 @@ use std::{thread, time::Duration};
 
 use camino::Utf8PathBuf;
 use sonara_build::build_bank;
-use sonara_firewheel::FirewheelBackend;
+use sonara_firewheel::{FirewheelBackend, FirewheelRequestResult};
 use sonara_model::{
     AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
     ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
@@ -78,14 +78,16 @@ fn main() {
         .expect("bank assets should decode and load");
 
     let emitter_id = backend.runtime_mut().create_emitter();
-    backend
-        .runtime_mut()
-        .set_emitter_param(emitter_id, surface_id, ParameterValue::Enum("stone".into()))
-        .expect("emitter param should set");
+    backend.queue_set_emitter_param(emitter_id, surface_id, ParameterValue::Enum("stone".into()));
+    backend.queue_play_on(emitter_id, event_id);
 
-    let instance_id = backend
-        .play_on(emitter_id, event_id)
-        .expect("event should play on emitter");
+    let request_results = backend
+        .apply_requests()
+        .expect("queued requests should apply");
+    let instance_id = match request_results.last() {
+        Some(FirewheelRequestResult::Played { instance_id }) => *instance_id,
+        other => panic!("expected final played result, got {other:?}"),
+    };
     let plan = backend
         .runtime()
         .active_plan(instance_id)
@@ -106,6 +108,7 @@ fn main() {
     println!("stone asset: {:?}", stone_asset);
     println!("resolved branch: {resolved_label}");
     println!("resolved assets: {:?}", plan.asset_ids);
+    println!("request results: {:?}", request_results);
     println!("playing for 2 seconds...");
 
     for _ in 0..20 {

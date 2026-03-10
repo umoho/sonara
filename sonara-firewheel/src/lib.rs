@@ -43,12 +43,48 @@ pub enum FirewheelBackendError {
     NewWorker(#[from] NewWorkerError),
 }
 
+/// Firewheel backend 可消费的一条最小请求
+#[derive(Debug, Clone, PartialEq)]
+pub enum FirewheelRequest {
+    Play {
+        event_id: EventId,
+    },
+    PlayOnEmitter {
+        emitter_id: EmitterId,
+        event_id: EventId,
+    },
+    SetGlobalParam {
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    },
+    SetEmitterParam {
+        emitter_id: EmitterId,
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    },
+}
+
+/// Firewheel backend 执行请求后的结果
+#[derive(Debug, Clone, PartialEq)]
+pub enum FirewheelRequestResult {
+    Played { instance_id: EventInstanceId },
+    ParameterSet,
+}
+
+/// Firewheel backend 在隔离模式下处理单条请求后的结果
+#[derive(Debug)]
+pub struct FirewheelRequestOutcome {
+    pub request: FirewheelRequest,
+    pub result: Result<FirewheelRequestResult, FirewheelBackendError>,
+}
+
 /// 基于 Firewheel 的最小 one-shot 播放后端
 pub struct FirewheelBackend {
     runtime: SonaraRuntime,
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
+    pending_requests: Vec<FirewheelRequest>,
 }
 
 impl FirewheelBackend {
@@ -77,6 +113,7 @@ impl FirewheelBackend {
             context,
             sampler_pool,
             sample_resources: HashMap::new(),
+            pending_requests: Vec::new(),
         })
     }
 
@@ -182,6 +219,12 @@ impl FirewheelBackend {
         Ok(instance_id)
     }
 
+    /// 排队一个未绑定 emitter 的播放请求
+    pub fn queue_play(&mut self, event_id: EventId) {
+        self.pending_requests
+            .push(FirewheelRequest::Play { event_id });
+    }
+
     /// 在 emitter 上播放一个事件
     pub fn play_on(
         &mut self,
@@ -198,6 +241,92 @@ impl FirewheelBackend {
         Ok(instance_id)
     }
 
+    /// 排队一个面向 emitter 的播放请求
+    pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
+        self.pending_requests.push(FirewheelRequest::PlayOnEmitter {
+            emitter_id,
+            event_id,
+        });
+    }
+
+    /// 设置一个全局参数
+    pub fn set_global_param(
+        &mut self,
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    ) -> Result<(), FirewheelBackendError> {
+        self.runtime.set_global_param(parameter_id, value)?;
+        Ok(())
+    }
+
+    /// 排队一个全局参数更新请求
+    pub fn queue_set_global_param(
+        &mut self,
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    ) {
+        self.pending_requests
+            .push(FirewheelRequest::SetGlobalParam {
+                parameter_id,
+                value,
+            });
+    }
+
+    /// 设置一个 emitter 参数
+    pub fn set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    ) -> Result<(), FirewheelBackendError> {
+        self.runtime
+            .set_emitter_param(emitter_id, parameter_id, value)?;
+        Ok(())
+    }
+
+    /// 排队一个 emitter 参数更新请求
+    pub fn queue_set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: sonara_model::ParameterId,
+        value: sonara_model::ParameterValue,
+    ) {
+        self.pending_requests
+            .push(FirewheelRequest::SetEmitterParam {
+                emitter_id,
+                parameter_id,
+                value,
+            });
+    }
+
+    /// 取出当前所有待处理请求
+    pub fn drain_requests(&mut self) -> Vec<FirewheelRequest> {
+        self.pending_requests.drain(..).collect()
+    }
+
+    /// 依次执行所有待处理请求, 遇到第一条错误立即返回
+    pub fn apply_requests(&mut self) -> Result<Vec<FirewheelRequestResult>, FirewheelBackendError> {
+        let requests = self.drain_requests();
+        let mut results = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            results.push(self.apply_request(&request)?);
+        }
+
+        Ok(results)
+    }
+
+    /// 依次执行所有待处理请求, 单条失败不会中断整批处理
+    pub fn apply_requests_isolated(&mut self) -> Vec<FirewheelRequestOutcome> {
+        self.drain_requests()
+            .into_iter()
+            .map(|request| {
+                let result = self.apply_request(&request);
+                FirewheelRequestOutcome { request, result }
+            })
+            .collect()
+    }
+
     /// 推进 Firewheel 上下文
     pub fn update(&mut self) -> Result<(), FirewheelBackendError> {
         self.context
@@ -205,6 +334,38 @@ impl FirewheelBackend {
             .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
         self.sampler_pool.poll(&self.context);
         Ok(())
+    }
+
+    fn apply_request(
+        &mut self,
+        request: &FirewheelRequest,
+    ) -> Result<FirewheelRequestResult, FirewheelBackendError> {
+        match request {
+            FirewheelRequest::Play { event_id } => Ok(FirewheelRequestResult::Played {
+                instance_id: self.play(*event_id)?,
+            }),
+            FirewheelRequest::PlayOnEmitter {
+                emitter_id,
+                event_id,
+            } => Ok(FirewheelRequestResult::Played {
+                instance_id: self.play_on(*emitter_id, *event_id)?,
+            }),
+            FirewheelRequest::SetGlobalParam {
+                parameter_id,
+                value,
+            } => {
+                self.set_global_param(*parameter_id, value.clone())?;
+                Ok(FirewheelRequestResult::ParameterSet)
+            }
+            FirewheelRequest::SetEmitterParam {
+                emitter_id,
+                parameter_id,
+                value,
+            } => {
+                self.set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
+                Ok(FirewheelRequestResult::ParameterSet)
+            }
+        }
     }
 
     fn playback_plan(&mut self, plan: &PlaybackPlan) -> Result<(), FirewheelBackendError> {
