@@ -74,11 +74,7 @@ fn main() {
     let mut backend =
         FirewheelBackend::new(Default::default()).expect("Firewheel backend should start");
     backend
-        .load_bank(
-            bank,
-            vec![event],
-            vec![wood_audio_asset.clone(), stone_audio_asset.clone()],
-        )
+        .load_bank(bank, vec![event])
         .expect("bank assets should decode and load");
 
     let emitter_id = backend.runtime_mut().create_emitter();

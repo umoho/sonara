@@ -27,8 +27,6 @@ pub enum FirewheelBackendError {
     Build(#[from] BuildError),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
-    #[error("bank `{0:?}` 引用了未提供定义的资源 `{1}`")]
-    MissingAssetDefinition(sonara_model::BankId, Uuid),
     #[error("资源 `{0}` 没有注册到 Firewheel 后端")]
     AssetNotRegistered(Uuid),
     #[error("资源 `{0}` 的声道数必须大于 0")]
@@ -97,21 +95,19 @@ impl FirewheelBackend {
         &mut self,
         bank: Bank,
         events: Vec<Event>,
-        assets: Vec<AudioAsset>,
     ) -> Result<(), FirewheelBackendError> {
-        let asset_by_id: HashMap<Uuid, &AudioAsset> =
-            assets.iter().map(|asset| (asset.id, asset)).collect();
-
         // 先注册 bank 引用到的资源, 让后续 play 路径只消费已准备好的 SampleResource.
-        for asset_id in bank
-            .resident_media
-            .iter()
-            .chain(bank.streaming_media.iter())
-        {
-            let asset = asset_by_id.get(asset_id).copied().ok_or(
-                FirewheelBackendError::MissingAssetDefinition(bank.id, *asset_id),
-            )?;
-            self.register_audio_asset(asset)?;
+        for asset in &bank.assets {
+            let audio_asset = AudioAsset {
+                id: asset.id,
+                name: asset.name.clone(),
+                source_path: asset.source_path.clone(),
+                import_settings: Default::default(),
+                streaming: asset.streaming,
+                loop_region: None,
+                analysis: None,
+            };
+            self.register_audio_asset(&audio_asset)?;
         }
 
         self.runtime.load_bank(bank, events)?;

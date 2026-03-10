@@ -12,7 +12,7 @@ pub mod parameter;
 pub mod snapshot;
 
 pub use asset::{AnalysisMetadata, AudioAsset, ImportSettings, LoopRegion, StreamingMode};
-pub use bank::Bank;
+pub use bank::{Bank, BankAsset};
 pub use bus::Bus;
 pub use event::{
     Event, EventContentNode, EventContentRoot, EventKind, LeafNode, LoopNode, NodeId, NodeRef,

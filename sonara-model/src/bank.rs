@@ -1,8 +1,18 @@
+use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::{BankId, EventId};
+use crate::{BankId, EventId, StreamingMode};
+
+/// bank 中用于运行时加载资源的最小清单项
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BankAsset {
+    pub id: Uuid,
+    pub name: SmolStr,
+    pub source_path: Utf8PathBuf,
+    pub streaming: StreamingMode,
+}
 
 /// 运行时的 bank 加载单元
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -10,6 +20,7 @@ pub struct Bank {
     pub id: BankId,
     pub name: SmolStr,
     pub events: Vec<EventId>,
+    pub assets: Vec<BankAsset>,
     pub resident_media: Vec<Uuid>,
     pub streaming_media: Vec<Uuid>,
 }
@@ -21,6 +32,7 @@ impl Bank {
             id: BankId::new(),
             name: name.into(),
             events: Vec::new(),
+            assets: Vec::new(),
             resident_media: Vec::new(),
             streaming_media: Vec::new(),
         }

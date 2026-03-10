@@ -5,7 +5,9 @@
 use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
-use sonara_model::{AudioAsset, Bank, Event, EventContentNode, NodeId, NodeRef, StreamingMode};
+use sonara_model::{
+    AudioAsset, Bank, BankAsset, Event, EventContentNode, NodeId, NodeRef, StreamingMode,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -107,6 +109,19 @@ pub fn build_bank(
                 .get(&asset_id)
                 .ok_or(BuildError::MissingAudioAsset)?;
 
+            if !bank
+                .assets
+                .iter()
+                .any(|bank_asset| bank_asset.id == asset_id)
+            {
+                bank.assets.push(BankAsset {
+                    id: asset.id,
+                    name: asset.name.clone(),
+                    source_path: asset.source_path.clone(),
+                    streaming: asset.streaming,
+                });
+            }
+
             match asset.streaming {
                 StreamingMode::Auto | StreamingMode::Resident => {
                     resident_media.insert(asset_id);
@@ -120,6 +135,7 @@ pub fn build_bank(
 
     bank.resident_media = resident_media.into_iter().collect();
     bank.streaming_media = streaming_media.into_iter().collect();
+    bank.assets.sort_by(|a, b| a.id.cmp(&b.id));
     bank.resident_media.sort_unstable();
     bank.streaming_media.sort_unstable();
 
