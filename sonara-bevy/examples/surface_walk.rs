@@ -13,7 +13,12 @@ use uuid::Uuid;
 
 const TILE_SIZE: f32 = 2.2;
 const TILE_GAP: f32 = 0.12;
-const WALK_SEGMENT_SECONDS: f32 = 0.7;
+const GRID_WIDTH: usize = 6;
+const GRID_DEPTH: usize = 4;
+const WALK_SPEED: f32 = 4.5;
+const FOOTSTEP_DISTANCE: f32 = 1.35;
+const FLOOR_Y: f32 = 0.0;
+const WALKER_HEIGHT: f32 = 0.55;
 
 fn main() {
     let event_id = EventId::new();
@@ -36,9 +41,9 @@ fn main() {
             wood_asset,
             stone_asset,
         })
-        .insert_resource(SurfaceStrip::default())
+        .insert_resource(SurfaceGrid::default())
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, animate_walker)
+        .add_systems(Update, control_walker)
         .run();
 }
 
@@ -50,22 +55,53 @@ struct DemoIds {
 }
 
 #[derive(Resource)]
-struct SurfaceStrip {
+struct SurfaceGrid {
     tiles: Vec<SurfaceKind>,
 }
 
-impl Default for SurfaceStrip {
+impl Default for SurfaceGrid {
     fn default() -> Self {
-        Self {
-            tiles: vec![
-                SurfaceKind::Wood,
-                SurfaceKind::Wood,
-                SurfaceKind::Stone,
-                SurfaceKind::Stone,
-                SurfaceKind::Wood,
-                SurfaceKind::Stone,
-            ],
+        let mut tiles = Vec::with_capacity(GRID_WIDTH * GRID_DEPTH);
+        for z in 0..GRID_DEPTH {
+            for x in 0..GRID_WIDTH {
+                let surface = if (x + z) % 2 == 0 {
+                    SurfaceKind::Wood
+                } else {
+                    SurfaceKind::Stone
+                };
+                tiles.push(surface);
+            }
         }
+        Self { tiles }
+    }
+}
+
+impl SurfaceGrid {
+    fn tile(&self, x: usize, z: usize) -> SurfaceKind {
+        self.tiles[z * GRID_WIDTH + x]
+    }
+
+    fn surface_at(&self, position: Vec3) -> Option<(usize, usize, SurfaceKind)> {
+        let pitch = TILE_SIZE + TILE_GAP;
+        let half_width = (GRID_WIDTH as f32 - 1.0) * pitch * 0.5;
+        let half_depth = (GRID_DEPTH as f32 - 1.0) * pitch * 0.5;
+        let x = ((position.x + half_width) / pitch).round() as isize;
+        let z = ((position.z + half_depth) / pitch).round() as isize;
+
+        if !(0..GRID_WIDTH as isize).contains(&x) || !(0..GRID_DEPTH as isize).contains(&z) {
+            return None;
+        }
+
+        let x = x as usize;
+        let z = z as usize;
+        Some((x, z, self.tile(x, z)))
+    }
+
+    fn world_bounds(&self) -> (f32, f32) {
+        let pitch = TILE_SIZE + TILE_GAP;
+        let half_width = (GRID_WIDTH as f32 - 1.0) * pitch * 0.5;
+        let half_depth = (GRID_DEPTH as f32 - 1.0) * pitch * 0.5;
+        (half_width, half_depth)
     }
 }
 
@@ -93,16 +129,14 @@ impl SurfaceKind {
 
 #[derive(Component)]
 struct Walker {
-    path: Vec<usize>,
-    segment_index: usize,
-    segment_progress: f32,
+    distance_since_step: f32,
 }
 
 fn setup_scene(
     mut commands: Commands,
     mut audio: NonSendMut<SonaraAudio>,
     demo_ids: NonSend<DemoIds>,
-    surface_strip: Res<SurfaceStrip>,
+    surface_grid: Res<SurfaceGrid>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -167,16 +201,19 @@ fn setup_scene(
         .expect("bank should load in startup system");
 
     let tile_mesh = meshes.add(Cuboid::new(TILE_SIZE, 0.2, TILE_SIZE));
-    for (index, surface) in surface_strip.tiles.iter().copied().enumerate() {
-        commands.spawn((
-            Mesh3d(tile_mesh.clone()),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: surface.color(),
-                perceptual_roughness: 1.0,
-                ..default()
-            })),
-            Transform::from_xyz(tile_center_x(index), 0.0, 0.0),
-        ));
+    for z in 0..GRID_DEPTH {
+        for x in 0..GRID_WIDTH {
+            let surface = surface_grid.tile(x, z);
+            commands.spawn((
+                Mesh3d(tile_mesh.clone()),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: surface.color(),
+                    perceptual_roughness: 1.0,
+                    ..default()
+                })),
+                Transform::from_xyz(tile_center_x(x), FLOOR_Y, tile_center_z(z)),
+            ));
+        }
     }
 
     commands.spawn((
@@ -187,25 +224,23 @@ fn setup_scene(
             metallic: 0.05,
             ..default()
         })),
-        Transform::from_xyz(tile_center_x(0), 0.55, 0.0),
+        Transform::from_xyz(tile_center_x(0), WALKER_HEIGHT, tile_center_z(0)),
         Walker {
-            path: (0..surface_strip.tiles.len()).collect(),
-            segment_index: 0,
-            segment_progress: 0.0,
+            distance_since_step: 0.0,
         },
         AudioEmitter::default(),
     ));
 
     commands.spawn((
         Camera3d::default(),
-        Transform::from_xyz(3.2, 7.8, 11.5).looking_at(Vec3::new(5.2, 0.0, 0.0), Vec3::Y),
+        Transform::from_xyz(0.0, 10.0, 12.0).looking_at(Vec3::new(0.0, 0.0, -0.6), Vec3::Y),
     ));
 
     commands.spawn((
         PointLight {
             intensity: 120_000.0,
             shadows_enabled: true,
-            range: 40.0,
+            range: 45.0,
             ..default()
         },
         Transform::from_xyz(5.0, 10.0, 6.0),
@@ -221,32 +256,64 @@ fn setup_scene(
     ));
 
     println!("Sonara surface_walk");
+    println!("WASD or arrow keys move the blue sphere");
     println!("brown tiles = wood, gray tiles = stone");
-    println!("the blue sphere walks across the strip and triggers matching footsteps");
+    println!("footsteps follow the surface under the sphere");
 }
 
-fn animate_walker(
+fn control_walker(
     time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut audio: NonSendMut<SonaraAudio>,
     demo_ids: NonSend<DemoIds>,
-    surface_strip: Res<SurfaceStrip>,
+    surface_grid: Res<SurfaceGrid>,
     mut walker_query: Query<(&mut Transform, &mut Walker, &mut AudioEmitter)>,
 ) {
     let Ok((mut transform, mut walker, mut emitter)) = walker_query.single_mut() else {
         return;
     };
 
-    if walker.segment_index >= walker.path.len().saturating_sub(1) {
+    let mut input = Vec2::ZERO;
+    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
+        input.x -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
+        input.x += 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
+        input.y -= 1.0;
+    }
+    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
+        input.y += 1.0;
+    }
+
+    if input == Vec2::ZERO {
+        walker.distance_since_step = 0.0;
+        transform.translation.y = WALKER_HEIGHT;
         return;
     }
 
-    walker.segment_progress += time.delta_secs() / WALK_SEGMENT_SECONDS;
+    let direction = input.normalize();
+    let delta = Vec3::new(direction.x, 0.0, direction.y) * WALK_SPEED * time.delta_secs();
+    let (half_width, half_depth) = surface_grid.world_bounds();
+    let mut next_position = transform.translation + delta;
+    next_position.x = next_position.x.clamp(-half_width, half_width);
+    next_position.z = next_position.z.clamp(-half_depth, half_depth);
 
-    while walker.segment_progress >= 1.0 {
-        walker.segment_progress -= 1.0;
-        walker.segment_index += 1;
-        let next_tile = walker.path[walker.segment_index];
-        let surface = surface_strip.tiles[next_tile];
+    let traveled = transform.translation.distance(next_position);
+    if traveled <= f32::EPSILON {
+        return;
+    }
+
+    transform.translation = next_position;
+    walker.distance_since_step += traveled;
+
+    while walker.distance_since_step >= FOOTSTEP_DISTANCE {
+        walker.distance_since_step -= FOOTSTEP_DISTANCE;
+
+        let Some((tile_x, tile_z, surface)) = surface_grid.surface_at(transform.translation) else {
+            continue;
+        };
 
         let results = {
             let mut update = audio.begin_update();
@@ -268,25 +335,24 @@ fn animate_walker(
             .expect("plan should exist after footstep play");
 
         println!(
-            "tile {} surface={} resolved_assets={:?}",
-            next_tile,
+            "tile=({}, {}) surface={} resolved_assets={:?}",
+            tile_x,
+            tile_z,
             surface.variant(),
             plan.asset_ids
         );
     }
 
-    let current_tile = walker.path[walker.segment_index];
-    let next_tile = walker
-        .path
-        .get(walker.segment_index + 1)
-        .copied()
-        .unwrap_or(current_tile);
-    let current_x = tile_center_x(current_tile);
-    let next_x = tile_center_x(next_tile);
-    transform.translation.x = current_x + (next_x - current_x) * walker.segment_progress;
-    transform.translation.y = 0.55 + walker.segment_progress.sin().abs() * 0.08;
+    let step_phase = (walker.distance_since_step / FOOTSTEP_DISTANCE) * std::f32::consts::PI;
+    transform.translation.y = WALKER_HEIGHT + step_phase.sin().abs() * 0.08;
 }
 
 fn tile_center_x(index: usize) -> f32 {
-    index as f32 * (TILE_SIZE + TILE_GAP)
+    let pitch = TILE_SIZE + TILE_GAP;
+    index as f32 * pitch - (GRID_WIDTH as f32 - 1.0) * pitch * 0.5
+}
+
+fn tile_center_z(index: usize) -> f32 {
+    let pitch = TILE_SIZE + TILE_GAP;
+    index as f32 * pitch - (GRID_DEPTH as f32 - 1.0) * pitch * 0.5
 }
