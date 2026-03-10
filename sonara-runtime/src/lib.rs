@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use sonara_model::{
-    Bank, BankId, BankObjects, Event, EventContentNode, EventId, NodeId, NodeRef, ParameterId,
-    ParameterValue, SnapshotId,
+    Bank, BankId, BankObjects, BusId, Event, EventContentNode, EventId, NodeId, NodeRef,
+    ParameterId, ParameterValue, Snapshot, SnapshotId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -54,6 +54,15 @@ pub struct ActiveEventInstance {
     pub event_id: EventId,
     pub emitter_id: Option<EmitterId>,
     pub plan: PlaybackPlan,
+}
+
+/// 运行中的 snapshot 实例
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveSnapshotInstance {
+    pub id: SnapshotInstanceId,
+    pub snapshot_id: SnapshotId,
+    pub fade: Fade,
+    pub overrides: HashMap<BusId, f32>,
 }
 
 /// 运行时可消费的一条最小请求
@@ -416,6 +425,10 @@ pub enum RuntimeError {
     EventInstanceNotFound(EventInstanceId),
     #[error("emitter `{0:?}` 不存在")]
     EmitterNotFound(EmitterId),
+    #[error("snapshot `{0:?}` 不存在")]
+    SnapshotNotLoaded(SnapshotId),
+    #[error("snapshot 引用了不存在的 bus `{0:?}`")]
+    SnapshotTargetBusNotFound(BusId),
 }
 
 /// 面向游戏逻辑的运行时入口
@@ -423,10 +436,14 @@ pub enum RuntimeError {
 pub struct SonaraRuntime {
     banks: HashMap<BankId, BankObjects>,
     events: HashMap<EventId, Event>,
+    snapshots: HashMap<SnapshotId, Snapshot>,
+    bus_volumes: HashMap<BusId, f32>,
     global_parameters: HashMap<ParameterId, ParameterValue>,
     emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
     active_instances: HashMap<EventInstanceId, ActiveEventInstance>,
+    active_snapshots: HashMap<SnapshotInstanceId, ActiveSnapshotInstance>,
     next_event_instance_id: u64,
+    next_snapshot_instance_id: u64,
     next_emitter_id: u64,
 }
 
@@ -443,6 +460,10 @@ impl SonaraRuntime {
 
         for event in events {
             self.events.insert(event.id, event);
+        }
+
+        for bus_id in &bank_objects.buses {
+            self.bus_volumes.entry(*bus_id).or_insert(1.0);
         }
 
         self.banks.insert(bank_id, bank_objects);
@@ -545,6 +566,14 @@ impl SonaraRuntime {
             .map(|instance| &instance.plan)
     }
 
+    /// 读取一个运行中的 snapshot 实例。
+    pub fn active_snapshot(
+        &self,
+        instance_id: SnapshotInstanceId,
+    ) -> Option<&ActiveSnapshotInstance> {
+        self.active_snapshots.get(&instance_id)
+    }
+
     /// 设置全局参数
     pub fn set_global_param(
         &mut self,
@@ -558,6 +587,16 @@ impl SonaraRuntime {
     /// 读取一个全局参数
     pub fn global_param(&self, parameter_id: ParameterId) -> Option<&ParameterValue> {
         self.global_parameters.get(&parameter_id)
+    }
+
+    /// 加载一个 snapshot 定义。
+    pub fn load_snapshot(&mut self, snapshot: Snapshot) {
+        self.snapshots.insert(snapshot.id, snapshot);
+    }
+
+    /// 读取当前某个 bus 的目标音量。
+    pub fn bus_volume(&self, bus_id: BusId) -> Option<f32> {
+        self.bus_volumes.get(&bus_id).copied()
     }
 
     /// 设置 emitter 参数
@@ -590,10 +629,37 @@ impl SonaraRuntime {
     /// 压入一个 snapshot
     pub fn push_snapshot(
         &mut self,
-        _snapshot_id: SnapshotId,
-        _fade: Fade,
+        snapshot_id: SnapshotId,
+        fade: Fade,
     ) -> Result<SnapshotInstanceId, RuntimeError> {
-        Ok(SnapshotInstanceId(0))
+        let snapshot = self
+            .snapshots
+            .get(&snapshot_id)
+            .ok_or(RuntimeError::SnapshotNotLoaded(snapshot_id))?;
+        let mut overrides = HashMap::with_capacity(snapshot.targets.len());
+
+        for target in &snapshot.targets {
+            if !self.bus_volumes.contains_key(&target.bus_id) {
+                return Err(RuntimeError::SnapshotTargetBusNotFound(target.bus_id));
+            }
+
+            self.bus_volumes.insert(target.bus_id, target.target_volume);
+            overrides.insert(target.bus_id, target.target_volume);
+        }
+
+        let instance_id = SnapshotInstanceId(self.next_snapshot_instance_id);
+        self.next_snapshot_instance_id += 1;
+        self.active_snapshots.insert(
+            instance_id,
+            ActiveSnapshotInstance {
+                id: instance_id,
+                snapshot_id,
+                fade,
+                overrides,
+            },
+        );
+
+        Ok(instance_id)
     }
 
     /// 执行一条最小运行时请求
@@ -759,7 +825,8 @@ impl SonaraRuntime {
 mod tests {
     use smol_str::SmolStr;
     use sonara_model::{
-        EventContentRoot, EventKind, SamplerNode, SequenceNode, SpatialMode, SwitchCase, SwitchNode,
+        EventContentRoot, EventKind, SamplerNode, SequenceNode, Snapshot, SnapshotTarget,
+        SpatialMode, SwitchCase, SwitchNode,
     };
 
     use super::*;
@@ -1060,5 +1127,61 @@ mod tests {
             queued.active_plan(instance_id).map(|plan| &plan.asset_ids),
             Some(&vec![asset_id])
         );
+    }
+
+    #[test]
+    fn push_snapshot_creates_active_instance_and_updates_bus_volume() {
+        let bus_id = BusId::new();
+        let snapshot = Snapshot {
+            id: SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: vec![SnapshotTarget {
+                bus_id,
+                target_volume: 0.65,
+            }],
+        };
+        let mut bank = Bank::new("core");
+        bank.objects.buses.push(bus_id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, Vec::new())
+            .expect("bank should load");
+        runtime.load_snapshot(snapshot.clone());
+
+        let instance_id = runtime
+            .push_snapshot(snapshot.id, Fade::seconds(snapshot.fade_in_seconds))
+            .expect("snapshot should push");
+
+        assert_eq!(runtime.bus_volume(bus_id), Some(0.65));
+        let active = runtime
+            .active_snapshot(instance_id)
+            .expect("active snapshot should exist");
+        assert_eq!(active.snapshot_id, snapshot.id);
+        assert_eq!(active.overrides.get(&bus_id), Some(&0.65));
+    }
+
+    #[test]
+    fn push_snapshot_rejects_unknown_target_bus() {
+        let snapshot = Snapshot {
+            id: SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: vec![SnapshotTarget {
+                bus_id: BusId::new(),
+                target_volume: 0.65,
+            }],
+        };
+
+        let mut runtime = SonaraRuntime::new();
+        runtime.load_snapshot(snapshot.clone());
+
+        assert!(matches!(
+            runtime.push_snapshot(snapshot.id, Fade::IMMEDIATE),
+            Err(RuntimeError::SnapshotTargetBusNotFound(_))
+        ));
     }
 }
