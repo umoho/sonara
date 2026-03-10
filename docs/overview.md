@@ -146,5 +146,6 @@ cargo run --example surface_walk -p sonara-bevy
 1. `README.md`
 2. `ARCHITECTURE.md`
 3. `PRD.md`
-4. `docs/concepts/authoring-and-bank.md`
-5. `docs/architecture/runtime-and-backend.md`
+4. `docs/concepts/glossary.md`
+5. `docs/concepts/authoring-and-bank.md`
+6. `docs/architecture/runtime-and-backend.md`
