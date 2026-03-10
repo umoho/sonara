@@ -17,7 +17,7 @@ use firewheel_symphonium::load_audio_file;
 use sonara_build::BuildError;
 use sonara_model::{AudioAsset, Bank, Event, EventId, ParameterId, ParameterValue};
 use sonara_runtime::{
-    AudioCommandBuffer, AudioCommandOutcome, EmitterId, EventInstanceId, PlaybackPlan,
+    AudioCommandOutcome, EmitterId, EventInstanceId, PlaybackPlan, RuntimeCommandBuffer,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
 };
 use thiserror::Error;
@@ -62,7 +62,7 @@ pub struct FirewheelBackend {
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
-    command_buffer: AudioCommandBuffer<FirewheelRequest>,
+    command_buffer: RuntimeCommandBuffer,
 }
 
 impl FirewheelBackend {
@@ -91,7 +91,7 @@ impl FirewheelBackend {
             context,
             sampler_pool,
             sample_resources: HashMap::new(),
-            command_buffer: AudioCommandBuffer::new(),
+            command_buffer: RuntimeCommandBuffer::new(),
         })
     }
 
@@ -199,8 +199,7 @@ impl FirewheelBackend {
 
     /// 排队一个未绑定 emitter 的播放请求
     pub fn queue_play(&mut self, event_id: EventId) {
-        self.command_buffer
-            .push(FirewheelRequest::Play { event_id });
+        self.command_buffer.queue_play(event_id);
     }
 
     /// 在 emitter 上播放一个事件
@@ -221,10 +220,7 @@ impl FirewheelBackend {
 
     /// 排队一个面向 emitter 的播放请求
     pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
-        self.command_buffer.push(FirewheelRequest::PlayOnEmitter {
-            emitter_id,
-            event_id,
-        });
+        self.command_buffer.queue_play_on(emitter_id, event_id);
     }
 
     /// 设置一个全局参数
@@ -239,10 +235,8 @@ impl FirewheelBackend {
 
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
-        self.command_buffer.push(FirewheelRequest::SetGlobalParam {
-            parameter_id,
-            value,
-        });
+        self.command_buffer
+            .queue_set_global_param(parameter_id, value);
     }
 
     /// 设置一个 emitter 参数
@@ -264,11 +258,8 @@ impl FirewheelBackend {
         parameter_id: ParameterId,
         value: ParameterValue,
     ) {
-        self.command_buffer.push(FirewheelRequest::SetEmitterParam {
-            emitter_id,
-            parameter_id,
-            value,
-        });
+        self.command_buffer
+            .queue_set_emitter_param(emitter_id, parameter_id, value);
     }
 
     /// 取出当前所有待处理请求

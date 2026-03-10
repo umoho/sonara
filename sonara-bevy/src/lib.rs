@@ -2,7 +2,7 @@
 
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{
-    AudioCommandBuffer, AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan,
+    AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
 
@@ -23,7 +23,7 @@ pub type AudioRequestOutcome = AudioCommandOutcome<AudioRequest, AudioRequestRes
 #[derive(Debug, Default)]
 pub struct SonaraAudio {
     runtime: SonaraRuntime,
-    command_buffer: AudioCommandBuffer<AudioRequest>,
+    command_buffer: RuntimeCommandBuffer,
 }
 
 impl SonaraAudio {
@@ -31,7 +31,7 @@ impl SonaraAudio {
     pub fn new() -> Self {
         Self {
             runtime: SonaraRuntime::new(),
-            command_buffer: AudioCommandBuffer::new(),
+            command_buffer: RuntimeCommandBuffer::new(),
         }
     }
 
@@ -49,7 +49,7 @@ impl SonaraAudio {
 
     /// 排队一个未绑定 emitter 的播放请求
     pub fn queue_play(&mut self, event_id: EventId) {
-        self.command_buffer.push(AudioRequest::Play { event_id });
+        self.command_buffer.queue_play(event_id);
     }
 
     /// 创建一个 emitter
@@ -90,10 +90,7 @@ impl SonaraAudio {
 
     /// 排队一个面向指定 emitter 的播放请求
     pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
-        self.command_buffer.push(AudioRequest::PlayOnEmitter {
-            emitter_id,
-            event_id,
-        });
+        self.command_buffer.queue_play_on(emitter_id, event_id);
     }
 
     /// 通过 AudioEmitter 组件播放事件
@@ -123,10 +120,8 @@ impl SonaraAudio {
 
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
-        self.command_buffer.push(AudioRequest::SetGlobalParam {
-            parameter_id,
-            value,
-        });
+        self.command_buffer
+            .queue_set_global_param(parameter_id, value);
     }
 
     /// 设置 emitter 参数
@@ -147,11 +142,8 @@ impl SonaraAudio {
         parameter_id: ParameterId,
         value: ParameterValue,
     ) {
-        self.command_buffer.push(AudioRequest::SetEmitterParam {
-            emitter_id,
-            parameter_id,
-            value,
-        });
+        self.command_buffer
+            .queue_set_emitter_param(emitter_id, parameter_id, value);
     }
 
     /// 通过 AudioEmitter 组件设置 emitter 参数

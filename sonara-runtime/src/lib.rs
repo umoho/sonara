@@ -84,6 +84,9 @@ pub enum RuntimeRequestResult {
     ParameterSet,
 }
 
+/// 默认使用的运行时命令缓冲区类型
+pub type RuntimeCommandBuffer = AudioCommandBuffer<RuntimeRequest>;
+
 /// 一组待执行的音频请求缓冲区
 #[derive(Debug)]
 pub struct AudioCommandBuffer<Request> {
@@ -157,6 +160,73 @@ impl<Request> AudioCommandBuffer<Request> {
                 AudioCommandOutcome { request, result }
             })
             .collect()
+    }
+}
+
+impl RuntimeRequest {
+    /// 构造一个未绑定 emitter 的播放请求
+    pub fn play(event_id: EventId) -> Self {
+        Self::Play { event_id }
+    }
+
+    /// 构造一个面向指定 emitter 的播放请求
+    pub fn play_on(emitter_id: EmitterId, event_id: EventId) -> Self {
+        Self::PlayOnEmitter {
+            emitter_id,
+            event_id,
+        }
+    }
+
+    /// 构造一个全局参数更新请求
+    pub fn set_global_param(parameter_id: ParameterId, value: ParameterValue) -> Self {
+        Self::SetGlobalParam {
+            parameter_id,
+            value,
+        }
+    }
+
+    /// 构造一个 emitter 参数更新请求
+    pub fn set_emitter_param(
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) -> Self {
+        Self::SetEmitterParam {
+            emitter_id,
+            parameter_id,
+            value,
+        }
+    }
+}
+
+impl AudioCommandBuffer<RuntimeRequest> {
+    /// 排队一个未绑定 emitter 的播放请求
+    pub fn queue_play(&mut self, event_id: EventId) {
+        self.push(RuntimeRequest::play(event_id));
+    }
+
+    /// 排队一个面向指定 emitter 的播放请求
+    pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
+        self.push(RuntimeRequest::play_on(emitter_id, event_id));
+    }
+
+    /// 排队一个全局参数更新请求
+    pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
+        self.push(RuntimeRequest::set_global_param(parameter_id, value));
+    }
+
+    /// 排队一个 emitter 参数更新请求
+    pub fn queue_set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) {
+        self.push(RuntimeRequest::set_emitter_param(
+            emitter_id,
+            parameter_id,
+            value,
+        ));
     }
 }
 
