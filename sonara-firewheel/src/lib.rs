@@ -14,9 +14,10 @@ use firewheel::{
 };
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
 use firewheel_symphonium::load_audio_file;
-use sonara_build::BuildError;
+use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
-    AudioAsset, Bank, BankAsset, BankManifest, Event, EventId, ParameterId, ParameterValue,
+    AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Event, EventId, ParameterId,
+    ParameterValue, Snapshot,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
@@ -119,10 +120,36 @@ impl FirewheelBackend {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<(), FirewheelBackendError> {
-        self.register_bank_manifest(&bank.manifest)?;
+        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+    }
 
-        self.runtime.load_bank(bank, events)?;
+    /// 加载一个 bank 以及和它配套的高层对象定义。
+    pub fn load_bank_with_definitions(
+        &mut self,
+        bank: Bank,
+        events: Vec<Event>,
+        buses: Vec<Bus>,
+        snapshots: Vec<Snapshot>,
+    ) -> Result<(), FirewheelBackendError> {
+        self.register_bank_manifest(&bank.manifest)?;
+        self.runtime
+            .load_bank_with_definitions(bank, events, buses, snapshots)?;
         Ok(())
+    }
+
+    /// 直接加载一份完整的 compiled bank 载荷。
+    pub fn load_compiled_bank(
+        &mut self,
+        package: CompiledBankPackage,
+    ) -> Result<BankId, FirewheelBackendError> {
+        let bank_id = package.bank.id;
+        self.load_bank_with_definitions(
+            package.bank,
+            package.events,
+            package.buses,
+            package.snapshots,
+        )?;
+        Ok(bank_id)
     }
 
     /// 注册一个 compiled bank manifest 引用到的所有资源。

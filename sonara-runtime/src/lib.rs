@@ -143,6 +143,18 @@ impl QueuedRuntime {
         self.runtime.load_bank(bank, events)
     }
 
+    /// 加载一个 bank 以及和它配套的高层对象定义。
+    pub fn load_bank_with_definitions(
+        &mut self,
+        bank: Bank,
+        events: Vec<Event>,
+        buses: Vec<sonara_model::Bus>,
+        snapshots: Vec<Snapshot>,
+    ) -> Result<BankId, RuntimeError> {
+        self.runtime
+            .load_bank_with_definitions(bank, events, buses, snapshots)
+    }
+
     /// 播放一个未绑定 emitter 的事件。
     pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
         self.runtime.play(event_id)
@@ -455,6 +467,17 @@ impl SonaraRuntime {
 
     /// 加载一个 bank 和它包含的事件定义
     pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
+        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+    }
+
+    /// 加载一个 bank 以及和它配套的高层对象定义。
+    pub fn load_bank_with_definitions(
+        &mut self,
+        bank: Bank,
+        events: Vec<Event>,
+        buses: Vec<sonara_model::Bus>,
+        snapshots: Vec<Snapshot>,
+    ) -> Result<BankId, RuntimeError> {
         let bank_id = bank.id;
         let bank_objects = bank.objects;
 
@@ -462,8 +485,16 @@ impl SonaraRuntime {
             self.events.insert(event.id, event);
         }
 
+        for bus in buses {
+            self.bus_volumes.entry(bus.id).or_insert(bus.default_volume);
+        }
+
         for bus_id in &bank_objects.buses {
             self.bus_volumes.entry(*bus_id).or_insert(1.0);
+        }
+
+        for snapshot in snapshots {
+            self.snapshots.insert(snapshot.id, snapshot);
         }
 
         self.banks.insert(bank_id, bank_objects);

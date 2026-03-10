@@ -2,8 +2,11 @@
 
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::prelude::{Component, NonSendMut};
+use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
-use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
+use sonara_model::{
+    Bank, BankId, Bus, Event, EventId, ParameterId, ParameterValue, Snapshot, SnapshotId,
+};
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
@@ -104,18 +107,42 @@ impl SonaraAudio {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<BankId, AudioBackendError> {
+        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+    }
+
+    /// 加载一个 bank 以及和它配套的高层对象定义。
+    pub fn load_bank_with_definitions(
+        &mut self,
+        bank: Bank,
+        events: Vec<Event>,
+        buses: Vec<Bus>,
+        snapshots: Vec<Snapshot>,
+    ) -> Result<BankId, AudioBackendError> {
         let bank_id = bank.id;
 
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
-                runtime.load_bank(bank, events)?;
+                runtime.load_bank_with_definitions(bank, events, buses, snapshots)?;
             }
             SonaraBackend::Firewheel(backend) => {
-                backend.load_bank(bank, events)?;
+                backend.load_bank_with_definitions(bank, events, buses, snapshots)?;
             }
         }
 
         Ok(bank_id)
+    }
+
+    /// 直接加载一份完整的 compiled bank 载荷。
+    pub fn load_compiled_bank(
+        &mut self,
+        package: CompiledBankPackage,
+    ) -> Result<BankId, AudioBackendError> {
+        self.load_bank_with_definitions(
+            package.bank,
+            package.events,
+            package.buses,
+            package.snapshots,
+        )
     }
 
     /// 开始一次 update system 风格的音频更新。

@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 use sonara_model::{
-    AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Event, EventContentNode,
-    EventId, NodeId, NodeRef, SnapshotId, StreamingMode,
+    AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Event, EventContentNode,
+    EventId, NodeId, NodeRef, Snapshot, SnapshotId, StreamingMode,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -33,6 +33,18 @@ pub enum BuildError {
     MissingBusDefinition,
     #[error("bank 定义引用了不存在的 snapshot")]
     MissingSnapshotDefinition,
+}
+
+/// 一次 bank 编译后的最小载荷。
+///
+/// 它把 runtime/backend 加载一个 compiled bank 所需的高层对象定义放在一起，
+/// 便于后续从文件读取后直接进入加载流程。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledBankPackage {
+    pub bank: Bank,
+    pub events: Vec<Event>,
+    pub buses: Vec<Bus>,
+    pub snapshots: Vec<Snapshot>,
 }
 
 /// 对单个事件做最小语义校验
@@ -156,18 +168,29 @@ pub fn build_bank_from_definition(
     definition: &BankDefinition,
     project: &AuthoringProject,
 ) -> Result<Bank, BuildError> {
+    Ok(compile_bank_definition(definition, project)?.bank)
+}
+
+/// 根据 authoring 项目里的 bank 定义编译一份完整 bank 载荷。
+pub fn compile_bank_definition(
+    definition: &BankDefinition,
+    project: &AuthoringProject,
+) -> Result<CompiledBankPackage, BuildError> {
     let event_by_id: HashMap<EventId, &Event> = project
         .events
         .iter()
         .map(|event| (event.id, event))
         .collect();
-    let bus_ids: HashSet<_> = project.buses.iter().map(|bus| bus.id).collect();
-    let snapshot_ids: HashSet<SnapshotId> = project
+    let bus_by_id: HashMap<_, &Bus> = project.buses.iter().map(|bus| (bus.id, bus)).collect();
+    let snapshot_by_id: HashMap<SnapshotId, &Snapshot> = project
         .snapshots
         .iter()
-        .map(|snapshot| snapshot.id)
+        .map(|snapshot| (snapshot.id, snapshot))
         .collect();
+
     let mut events = Vec::with_capacity(definition.events.len());
+    let mut buses = Vec::with_capacity(definition.buses.len());
+    let mut snapshots = Vec::with_capacity(definition.snapshots.len());
 
     for event_id in &definition.events {
         let event = event_by_id
@@ -177,22 +200,30 @@ pub fn build_bank_from_definition(
     }
 
     for bus_id in &definition.buses {
-        if !bus_ids.contains(bus_id) {
-            return Err(BuildError::MissingBusDefinition);
-        }
+        let bus = bus_by_id
+            .get(bus_id)
+            .ok_or(BuildError::MissingBusDefinition)?;
+        buses.push((*bus).clone());
     }
 
     for snapshot_id in &definition.snapshots {
-        if !snapshot_ids.contains(snapshot_id) {
-            return Err(BuildError::MissingSnapshotDefinition);
-        }
+        let snapshot = snapshot_by_id
+            .get(snapshot_id)
+            .ok_or(BuildError::MissingSnapshotDefinition)?;
+        snapshots.push((*snapshot).clone());
     }
 
     let mut bank = build_bank(definition.name.clone(), &events, &project.assets)?;
     bank.id = definition.id;
     bank.objects.buses = definition.buses.clone();
     bank.objects.snapshots = definition.snapshots.clone();
-    Ok(bank)
+
+    Ok(CompiledBankPackage {
+        bank,
+        events,
+        buses,
+        snapshots,
+    })
 }
 
 /// 收集一个事件中所有被 `Sampler` 引用的资源 ID
@@ -467,5 +498,48 @@ mod tests {
 
         assert_eq!(bank.objects.buses, vec![bus.id]);
         assert_eq!(bank.objects.snapshots, vec![snapshot.id]);
+    }
+
+    #[test]
+    fn compile_bank_definition_returns_selected_object_definitions() {
+        let selected_asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let selected_sampler_id = NodeId::new();
+        let selected_event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: selected_sampler_id,
+                asset_id: selected_asset.id,
+            })],
+            selected_sampler_id,
+        );
+        let bus = sonara_model::Bus::new("sfx");
+        let snapshot = sonara_model::Snapshot {
+            id: sonara_model::SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: vec![sonara_model::SnapshotTarget {
+                bus_id: bus.id,
+                target_volume: 0.8,
+            }],
+        };
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(selected_asset);
+        project.events.push(selected_event.clone());
+        project.buses.push(bus.clone());
+        project.snapshots.push(snapshot.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(selected_event.id);
+        definition.buses.push(bus.id);
+        definition.snapshots.push(snapshot.id);
+
+        let package =
+            compile_bank_definition(&definition, &project).expect("package should compile");
+
+        assert_eq!(package.bank.id, definition.id);
+        assert_eq!(package.events, vec![selected_event]);
+        assert_eq!(package.buses, vec![bus]);
+        assert_eq!(package.snapshots, vec![snapshot]);
     }
 }
