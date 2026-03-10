@@ -12,12 +12,12 @@ use firewheel::{
     nodes::sampler::SamplerNode,
     sample_resource::{InterleavedResourceF32, SampleResource},
 };
-use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan};
+use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
 use firewheel_symphonium::load_audio_file;
 use sonara_build::BuildError;
 use sonara_model::{AudioAsset, Bank, Event, EventId, ParameterId, ParameterValue};
 use sonara_runtime::{
-    AudioCommandOutcome, EmitterId, EventInstanceId, PlaybackPlan, RuntimeCommandBuffer,
+    AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
 };
 use thiserror::Error;
@@ -44,6 +44,8 @@ pub enum FirewheelBackendError {
     Update(String),
     #[error("Firewheel worker 创建失败: {0}")]
     NewWorker(#[from] NewWorkerError),
+    #[error("Firewheel backend 暂不支持非立即 stop, fade={0} 秒")]
+    UnsupportedFade(f32),
 }
 
 /// Firewheel backend 可消费的一条最小请求
@@ -62,6 +64,8 @@ pub struct FirewheelBackend {
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
+    instance_workers: HashMap<EventInstanceId, Vec<WorkerID>>,
+    worker_instances: HashMap<WorkerID, EventInstanceId>,
     command_buffer: RuntimeCommandBuffer,
 }
 
@@ -91,6 +95,8 @@ impl FirewheelBackend {
             context,
             sampler_pool,
             sample_resources: HashMap::new(),
+            instance_workers: HashMap::new(),
+            worker_instances: HashMap::new(),
             command_buffer: RuntimeCommandBuffer::new(),
         })
     }
@@ -193,7 +199,7 @@ impl FirewheelBackend {
             .active_plan(instance_id)
             .cloned()
             .expect("active plan should exist right after play");
-        self.playback_plan(&plan)?;
+        self.playback_plan(instance_id, &plan)?;
         Ok(instance_id)
     }
 
@@ -214,7 +220,7 @@ impl FirewheelBackend {
             .active_plan(instance_id)
             .cloned()
             .expect("active plan should exist right after play_on");
-        self.playback_plan(&plan)?;
+        self.playback_plan(instance_id, &plan)?;
         Ok(instance_id)
     }
 
@@ -292,12 +298,44 @@ impl FirewheelBackend {
             .collect()
     }
 
+    /// 停止一个事件实例。
+    ///
+    /// 当前最小实现只支持立即停止。非零 fade 先显式报错，避免制造已经支持淡出的假象。
+    pub fn stop(
+        &mut self,
+        instance_id: EventInstanceId,
+        fade: Fade,
+    ) -> Result<(), FirewheelBackendError> {
+        if fade.duration_seconds != 0.0 {
+            return Err(FirewheelBackendError::UnsupportedFade(
+                fade.duration_seconds,
+            ));
+        }
+
+        self.runtime.stop(instance_id, fade)?;
+
+        let worker_ids = self
+            .instance_workers
+            .remove(&instance_id)
+            .unwrap_or_default();
+        for worker_id in worker_ids {
+            self.worker_instances.remove(&worker_id);
+            self.sampler_pool.stop(worker_id, &mut self.context);
+        }
+
+        self.update()?;
+        Ok(())
+    }
+
     /// 推进 Firewheel 上下文
     pub fn update(&mut self) -> Result<(), FirewheelBackendError> {
         self.context
             .update()
             .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
-        self.sampler_pool.poll(&self.context);
+        let poll_result = self.sampler_pool.poll(&self.context);
+        for worker_id in poll_result.finished_workers {
+            self.finish_worker(worker_id);
+        }
         Ok(())
     }
 
@@ -313,23 +351,33 @@ impl FirewheelBackend {
                 .active_plan(instance_id)
                 .cloned()
                 .expect("active plan should exist right after play request");
-            self.playback_plan(&plan)?;
+            self.playback_plan(instance_id, &plan)?;
             Ok(FirewheelRequestResult::Played { instance_id })
         } else {
             Ok(result)
         }
     }
 
-    fn playback_plan(&mut self, plan: &PlaybackPlan) -> Result<(), FirewheelBackendError> {
+    fn playback_plan(
+        &mut self,
+        instance_id: EventInstanceId,
+        plan: &PlaybackPlan,
+    ) -> Result<(), FirewheelBackendError> {
+        self.instance_workers.remove(&instance_id);
+
         for asset_id in &plan.asset_ids {
-            self.play_asset(*asset_id)?;
+            self.play_asset(instance_id, *asset_id)?;
         }
 
         self.update()?;
         Ok(())
     }
 
-    fn play_asset(&mut self, asset_id: Uuid) -> Result<(), FirewheelBackendError> {
+    fn play_asset(
+        &mut self,
+        instance_id: EventInstanceId,
+        asset_id: Uuid,
+    ) -> Result<(), FirewheelBackendError> {
         let resource = self
             .sample_resources
             .get(&asset_id)
@@ -339,9 +387,38 @@ impl FirewheelBackend {
         sampler.set_sample(resource);
         sampler.start_or_restart();
 
-        self.sampler_pool
-            .new_worker(&sampler, true, &mut self.context, |_fx_chain, _cx| {})?;
+        let worker =
+            self.sampler_pool
+                .new_worker(&sampler, true, &mut self.context, |_fx_chain, _cx| {})?;
+        self.attach_worker(instance_id, worker.worker_id);
+
+        if let Some(old_worker_id) = worker.old_worker_id {
+            self.finish_worker(old_worker_id);
+        }
 
         Ok(())
+    }
+
+    fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
+        self.worker_instances.insert(worker_id, instance_id);
+        self.instance_workers
+            .entry(instance_id)
+            .or_default()
+            .push(worker_id);
+    }
+
+    fn finish_worker(&mut self, worker_id: WorkerID) {
+        let Some(instance_id) = self.worker_instances.remove(&worker_id) else {
+            return;
+        };
+
+        if let Some(worker_ids) = self.instance_workers.get_mut(&instance_id) {
+            worker_ids.retain(|id| *id != worker_id);
+
+            if worker_ids.is_empty() {
+                self.instance_workers.remove(&instance_id);
+                let _ = self.runtime.stop(instance_id, Fade::IMMEDIATE);
+            }
+        }
     }
 }
