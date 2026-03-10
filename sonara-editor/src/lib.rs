@@ -2,6 +2,8 @@
 //!
 //! 当前阶段只打通 authoring 项目读取和 compiled bank 导出流程。
 
+mod i18n;
+
 use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -9,6 +11,7 @@ use std::{
 
 use eframe::egui::{self, Align, Color32, Layout, RichText, TextEdit};
 use egui_chinese_font::setup_chinese_fonts;
+use i18n::{EditorLocale, TextKey, TextTemplate, template, text};
 use sonara_build::{ProjectExportBankError, compile_project_bank_to_file};
 use sonara_model::{AuthoringProject, BankDefinition, Event, ProjectFileError};
 
@@ -32,11 +35,16 @@ pub fn run() -> eframe::Result<()> {
             let mut app = EditorApp::new();
 
             if let Err(error) = setup_chinese_fonts(&cc.egui_ctx) {
-                app.state.status_message = format!("中文字体加载失败: {error}");
+                app.state.status_message = app.state.tr(TextTemplate::FontLoadFailed {
+                    error: error.to_string(),
+                });
                 app.state
-                    .push_error_log(format!("中文字体加载失败, error={error}"));
+                    .push_error_log(app.state.tr(TextTemplate::FontLoadFailed {
+                        error: error.to_string(),
+                    }));
             } else {
-                app.state.push_info_log("中文字体加载成功".to_owned());
+                app.state
+                    .push_info_log(app.state.tx(TextKey::FontLoaded).to_owned());
             }
 
             Ok(Box::new(app))
@@ -80,6 +88,7 @@ impl eframe::App for EditorApp {
 /// 这一层只维护 UI 所需的瞬时状态, 不把 authoring 模型和 UI 容器硬耦合。
 #[derive(Debug, Default)]
 pub struct EditorState {
+    pub locale: EditorLocale,
     pub project_path: String,
     pub export_path: String,
     pub loaded_project: Option<AuthoringProject>,
@@ -89,21 +98,50 @@ pub struct EditorState {
 }
 
 impl EditorState {
+    fn tx(&self, key: TextKey) -> &'static str {
+        text(self.locale, key)
+    }
+
+    fn tr(&self, template_value: TextTemplate) -> String {
+        template(self.locale, template_value)
+    }
+
     fn draw_top_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("project_toolbar")
             .resizable(false)
             .show(ctx, |ui| {
+                let project_path_hint = self.tx(TextKey::ProjectPathHint);
+                let load_project_label = self.tx(TextKey::LoadProject);
+                let language_label = self.tx(TextKey::Language);
+
                 ui.horizontal(|ui| {
-                    ui.label("Project 路径");
+                    ui.label(self.tx(TextKey::ProjectPath));
                     ui.add(
                         TextEdit::singleline(&mut self.project_path)
                             .desired_width(f32::INFINITY)
-                            .hint_text("输入 project.json 路径"),
+                            .hint_text(project_path_hint),
                     );
 
-                    if ui.button("加载 project").clicked() {
+                    if ui.button(load_project_label).clicked() {
                         self.load_project();
                     }
+
+                    ui.separator();
+                    ui.label(language_label);
+                    egui::ComboBox::from_id_salt("editor_locale")
+                        .selected_text(self.locale.display_name())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.locale,
+                                EditorLocale::ZhCn,
+                                EditorLocale::ZhCn.display_name(),
+                            );
+                            ui.selectable_value(
+                                &mut self.locale,
+                                EditorLocale::EnUs,
+                                EditorLocale::EnUs.display_name(),
+                            );
+                        });
                 });
 
                 if !self.status_message.is_empty() {
@@ -117,21 +155,33 @@ impl EditorState {
             .resizable(true)
             .default_width(280.0)
             .show(ctx, |ui| {
-                ui.heading("Project");
+                ui.heading(self.tx(TextKey::ProjectPanel));
                 ui.separator();
 
                 let Some(project) = &self.loaded_project else {
-                    ui.label("尚未加载 project.json");
+                    ui.label(self.tx(TextKey::NoProjectLoaded));
                     return;
                 };
 
-                ui.label(format!("名称: {}", project.name));
-                ui.label(format!("Assets: {}", project.assets.len()));
-                ui.label(format!("Events: {}", project.events.len()));
-                ui.label(format!("Banks: {}", project.banks.len()));
+                ui.label(format!("{}: {}", self.tx(TextKey::Name), project.name));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::Assets),
+                    project.assets.len()
+                ));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::Events),
+                    project.events.len()
+                ));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::Banks),
+                    project.banks.len()
+                ));
 
                 ui.separator();
-                ui.label(RichText::new("Bank 列表").strong());
+                ui.label(RichText::new(self.tx(TextKey::BankList)).strong());
 
                 let bank_names: Vec<String> = project
                     .banks
@@ -158,46 +208,62 @@ impl EditorState {
 
     fn draw_center_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Bank Export");
+            ui.heading(self.tx(TextKey::BankExport));
             ui.separator();
 
             let Some(project) = &self.loaded_project else {
-                ui.label("先加载一个 authoring project。");
+                ui.label(self.tx(TextKey::LoadProjectFirst));
                 return;
             };
 
             let Some(selected_bank_name) = self.selected_bank_name.clone() else {
-                ui.label("先从左侧选择一个 bank。");
+                ui.label(self.tx(TextKey::SelectBankFirst));
                 return;
             };
 
             let Some(bank) = project.bank_named(&selected_bank_name) else {
-                ui.colored_label(Color32::RED, "当前选中的 bank 已不存在。");
+                ui.colored_label(Color32::RED, self.tx(TextKey::SelectedBankMissing));
                 return;
             };
 
-            ui.label(format!("当前 bank: {}", bank.name));
-            ui.label(format!("事件数量: {}", bank.events.len()));
-            ui.label(format!("Bus 数量: {}", bank.buses.len()));
-            ui.label(format!("Snapshot 数量: {}", bank.snapshots.len()));
+            ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank.name));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::EventCount),
+                bank.events.len()
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::BusCount),
+                bank.buses.len()
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::SnapshotCount),
+                bank.snapshots.len()
+            ));
 
             ui.add_space(8.0);
-            ui.label("输出路径");
+            let output_path_hint = self.tx(TextKey::OutputPathHint);
+            ui.label(self.tx(TextKey::OutputPath));
             ui.add(
                 TextEdit::singleline(&mut self.export_path)
                     .desired_width(f32::INFINITY)
-                    .hint_text("输入导出的 compiled bank JSON 路径"),
+                    .hint_text(output_path_hint),
             );
 
             ui.add_space(8.0);
             let mut should_export = false;
             let mut should_reset_export_path = false;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                if ui.button("导出 compiled bank").clicked() {
+                if ui.button(self.tx(TextKey::ExportCompiledBank)).clicked() {
                     should_export = true;
                 }
 
-                if ui.button("重置默认输出路径").clicked() {
+                if ui
+                    .button(self.tx(TextKey::ResetDefaultExportPath))
+                    .clicked()
+                {
                     should_reset_export_path = true;
                 }
             });
@@ -212,9 +278,9 @@ impl EditorState {
 
             ui.add_space(12.0);
             ui.group(|ui| {
-                ui.label(RichText::new("导出说明").strong());
-                ui.label("编辑器读取的是 project.json。");
-                ui.label("导出按钮会调用 sonara-build 生成 runtime 使用的 compiled bank JSON。");
+                ui.label(RichText::new(self.tx(TextKey::ExportGuide)).strong());
+                ui.label(self.tx(TextKey::ExportGuideLine1));
+                ui.label(self.tx(TextKey::ExportGuideLine2));
             });
         });
     }
@@ -224,16 +290,16 @@ impl EditorState {
             .resizable(true)
             .default_width(320.0)
             .show(ctx, |ui| {
-                ui.heading("Inspector");
+                ui.heading(self.tx(TextKey::Inspector));
                 ui.separator();
 
                 let Some(project) = &self.loaded_project else {
-                    ui.label("尚未加载 project。");
+                    ui.label(self.tx(TextKey::NoProjectLoadedShort));
                     return;
                 };
 
                 let Some(bank) = self.selected_bank(project) else {
-                    ui.label("尚未选择 bank。");
+                    ui.label(self.tx(TextKey::NoBankSelected));
                     return;
                 };
 
@@ -251,15 +317,15 @@ impl EditorState {
             .default_height(160.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading("Log");
-                    if ui.button("清空").clicked() {
+                    ui.heading(self.tx(TextKey::Log));
+                    if ui.button(self.tx(TextKey::Clear)).clicked() {
                         self.logs.clear();
                     }
                 });
                 ui.separator();
 
                 if self.logs.is_empty() {
-                    ui.label("暂无日志。");
+                    ui.label(self.tx(TextKey::NoLogs));
                     return;
                 }
 
@@ -286,9 +352,9 @@ impl EditorState {
         project: &AuthoringProject,
         bank: &BankDefinition,
     ) {
-        ui.label(RichText::new("Events").strong());
+        ui.label(RichText::new(self.tx(TextKey::Events)).strong());
         if bank.events.is_empty() {
-            ui.label("无 events。");
+            ui.label(self.tx(TextKey::NoEvents));
             return;
         }
 
@@ -300,16 +366,19 @@ impl EditorState {
                     if let Some(event) = project.events.iter().find(|event| event.id == *event_id) {
                         ui.label(format!("{} | {}", event.name, format_event_id(event)));
                     } else {
-                        ui.colored_label(Color32::YELLOW, format!("缺失 event: {}", event_id.0));
+                        ui.colored_label(
+                            Color32::YELLOW,
+                            format!("{}: {}", self.tx(TextKey::MissingEvent), event_id.0),
+                        );
                     }
                 }
             });
     }
 
     fn draw_bus_list(&self, ui: &mut egui::Ui, project: &AuthoringProject, bank: &BankDefinition) {
-        ui.label(RichText::new("Buses").strong());
+        ui.label(RichText::new(self.tx(TextKey::Buses)).strong());
         if bank.buses.is_empty() {
-            ui.label("无 buses。");
+            ui.label(self.tx(TextKey::NoBuses));
             return;
         }
 
@@ -321,7 +390,10 @@ impl EditorState {
                     if let Some(bus) = project.buses.iter().find(|bus| bus.id == *bus_id) {
                         ui.label(format!("{} | {}", bus.name, bus.id.0));
                     } else {
-                        ui.colored_label(Color32::YELLOW, format!("缺失 bus: {}", bus_id.0));
+                        ui.colored_label(
+                            Color32::YELLOW,
+                            format!("{}: {}", self.tx(TextKey::MissingBus), bus_id.0),
+                        );
                     }
                 }
             });
@@ -333,9 +405,9 @@ impl EditorState {
         project: &AuthoringProject,
         bank: &BankDefinition,
     ) {
-        ui.label(RichText::new("Snapshots").strong());
+        ui.label(RichText::new(self.tx(TextKey::Snapshots)).strong());
         if bank.snapshots.is_empty() {
-            ui.label("无 snapshots。");
+            ui.label(self.tx(TextKey::NoSnapshots));
             return;
         }
 
@@ -353,7 +425,7 @@ impl EditorState {
                     } else {
                         ui.colored_label(
                             Color32::YELLOW,
-                            format!("缺失 snapshot: {}", snapshot_id.0),
+                            format!("{}: {}", self.tx(TextKey::MissingSnapshot), snapshot_id.0),
                         );
                     }
                 }
@@ -365,7 +437,9 @@ impl EditorState {
         match AuthoringProject::read_json_file(&self.project_path) {
             Ok(project) => {
                 self.loaded_project = Some(project);
-                self.status_message = format!("已加载 project: {}", self.project_path);
+                self.status_message = self.tr(TextTemplate::ProjectLoaded {
+                    path: self.project_path.clone(),
+                });
 
                 let first_bank_name = self
                     .loaded_project
@@ -379,17 +453,20 @@ impl EditorState {
                     .map(|name| self.suggest_export_path(name))
                     .unwrap_or_default();
 
-                self.push_info_log(format!("加载成功: {}", self.project_path));
+                self.push_info_log(self.tr(TextTemplate::LoadSucceeded {
+                    path: self.project_path.clone(),
+                }));
             }
             Err(error) => {
                 self.loaded_project = None;
                 self.selected_bank_name = None;
-                self.status_message = format!("加载失败: {}", render_project_error(&error));
-                self.push_error_log(format!(
-                    "加载 project 失败, path={}, error={}",
-                    self.project_path,
-                    render_project_error(&error)
-                ));
+                self.status_message = self.tr(TextTemplate::LoadFailed {
+                    error: render_project_error(&error),
+                });
+                self.push_error_log(self.tr(TextTemplate::LoadFailedLog {
+                    path: self.project_path.clone(),
+                    error: render_project_error(&error),
+                }));
             }
         }
     }
@@ -398,48 +475,53 @@ impl EditorState {
     pub fn select_bank(&mut self, bank_name: &str) {
         self.selected_bank_name = Some(bank_name.to_owned());
         self.export_path = self.suggest_export_path(bank_name);
-        self.status_message = format!("已选择 bank: {bank_name}");
+        self.status_message = self.tr(TextTemplate::SelectBank {
+            bank_name: bank_name.to_owned(),
+        });
     }
 
     /// 导出当前选中的 bank。
     pub fn export_selected_bank(&mut self) {
         let Some(project) = &self.loaded_project else {
-            self.status_message = "导出失败: 尚未加载 project".to_owned();
-            self.push_error_log("导出失败, 尚未加载 project".to_owned());
+            self.status_message = self.tr(TextTemplate::ExportFailedNoProject);
+            self.push_error_log(self.tr(TextTemplate::ExportFailedNoProject));
             return;
         };
 
         let Some(bank_name) = self.selected_bank_name.clone() else {
-            self.status_message = "导出失败: 尚未选择 bank".to_owned();
-            self.push_error_log("导出失败, 尚未选择 bank".to_owned());
+            self.status_message = self.tr(TextTemplate::ExportFailedNoBank);
+            self.push_error_log(self.tr(TextTemplate::ExportFailedNoBank));
             return;
         };
 
         if self.export_path.trim().is_empty() {
-            self.status_message = "导出失败: 输出路径不能为空".to_owned();
-            self.push_error_log("导出失败, 输出路径为空".to_owned());
+            self.status_message = self.tr(TextTemplate::ExportFailedEmptyOutputPath);
+            self.push_error_log(self.tr(TextTemplate::ExportFailedEmptyOutputPath));
             return;
         }
 
         match compile_project_bank_to_file(project, &bank_name, &self.export_path) {
             Ok(package) => {
-                self.status_message =
-                    format!("导出成功: {} -> {}", package.bank.name, self.export_path);
-                self.push_info_log(format!(
-                    "导出成功, bank={}, events={}, output={}",
-                    package.bank.name,
-                    package.events.len(),
-                    self.export_path
-                ));
+                self.status_message = self.tr(TextTemplate::ExportSucceeded {
+                    bank_name: package.bank.name.to_string(),
+                    output_path: self.export_path.clone(),
+                });
+                self.push_info_log(self.tr(TextTemplate::ExportSucceededLog {
+                    bank_name: package.bank.name.to_string(),
+                    event_count: package.events.len(),
+                    output_path: self.export_path.clone(),
+                }));
             }
             Err(error) => {
-                self.status_message = format!("导出失败: {}", render_export_error(&error));
-                self.push_error_log(format!(
-                    "导出失败, bank={}, output={}, error={}",
+                let rendered_error = render_export_error(&error);
+                self.status_message = self.tr(TextTemplate::ExportFailed {
+                    error: rendered_error.clone(),
+                });
+                self.push_error_log(self.tr(TextTemplate::ExportFailedLog {
                     bank_name,
-                    self.export_path,
-                    render_export_error(&error)
-                ));
+                    output_path: self.export_path.clone(),
+                    error: rendered_error,
+                }));
             }
         }
     }
