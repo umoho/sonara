@@ -1,0 +1,8 @@
+[package]
+name = "sonara-firewheel"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+sonara-runtime = { path = "../sonara-runtime" }

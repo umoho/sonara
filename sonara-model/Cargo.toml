@@ -1,0 +1,11 @@
+[package]
+name = "sonara-model"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+camino.workspace = true
+serde.workspace = true
+smol_str.workspace = true
+uuid.workspace = true

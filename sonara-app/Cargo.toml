@@ -1,0 +1,8 @@
+[package]
+name = "sonara-app"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+sonara-editor = { path = "../sonara-editor" }

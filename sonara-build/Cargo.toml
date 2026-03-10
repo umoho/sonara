@@ -1,0 +1,9 @@
+[package]
+name = "sonara-build"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+sonara-model = { path = "../sonara-model" }
+thiserror.workspace = true

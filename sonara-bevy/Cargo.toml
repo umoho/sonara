@@ -1,0 +1,9 @@
+[package]
+name = "sonara-bevy"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+sonara-model = { path = "../sonara-model" }
+sonara-runtime = { path = "../sonara-runtime" }
