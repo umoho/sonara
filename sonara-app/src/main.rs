@@ -7,6 +7,7 @@ use sonara_model::{
     AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
     ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
 };
+use sonara_runtime::Fade;
 use uuid::Uuid;
 
 fn main() {
@@ -109,9 +110,22 @@ fn main() {
     println!("resolved branch: {resolved_label}");
     println!("resolved assets: {:?}", plan.asset_ids);
     println!("request results: {:?}", request_results);
-    println!("playing for 2 seconds...");
+    println!("playing for 100ms before stop...");
 
-    for _ in 0..20 {
+    for _ in 0..1 {
+        backend.update().expect("backend update should succeed");
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    backend.queue_stop(instance_id, Fade::IMMEDIATE);
+    let stop_results = backend.apply_requests().expect("queued stop should apply");
+    let plan_after_stop = backend.runtime().active_plan(instance_id);
+
+    println!("stop request results: {:?}", stop_results);
+    println!("active plan after stop: {:?}", plan_after_stop);
+    println!("draining backend for 400ms after stop...");
+
+    for _ in 0..4 {
         backend.update().expect("backend update should succeed");
         thread::sleep(Duration::from_millis(100));
     }
