@@ -6,3 +6,6 @@ version.workspace = true
 
 [dependencies]
 sonara-editor = { path = "../sonara-editor" }
+sonara-model = { path = "../sonara-model" }
+sonara-runtime = { path = "../sonara-runtime" }
+uuid.workspace = true

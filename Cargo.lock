@@ -264,6 +264,9 @@ name = "sonara-app"
 version = "0.1.0"
 dependencies = [
  "sonara-editor",
+ "sonara-model",
+ "sonara-runtime",
+ "uuid",
 ]
 
 [[package]]

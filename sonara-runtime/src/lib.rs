@@ -17,6 +17,10 @@ pub struct EventInstanceId(u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SnapshotInstanceId(u64);
 
+/// 运行时 emitter ID
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EmitterId(u64);
+
 /// 停止或切换时使用的淡变参数
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fade {
@@ -39,6 +43,7 @@ impl Fade {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybackPlan {
     pub event_id: EventId,
+    pub emitter_id: Option<EmitterId>,
     pub asset_ids: Vec<Uuid>,
 }
 
@@ -47,6 +52,7 @@ pub struct PlaybackPlan {
 pub struct ActiveEventInstance {
     pub id: EventInstanceId,
     pub event_id: EventId,
+    pub emitter_id: Option<EmitterId>,
     pub plan: PlaybackPlan,
 }
 
@@ -67,6 +73,8 @@ pub enum RuntimeError {
     MissingNode(NodeId),
     #[error("事件实例 `{0:?}` 不存在")]
     EventInstanceNotFound(EventInstanceId),
+    #[error("emitter `{0:?}` 不存在")]
+    EmitterNotFound(EmitterId),
 }
 
 /// 面向游戏逻辑的运行时入口
@@ -75,8 +83,10 @@ pub struct SonaraRuntime {
     banks: HashMap<BankId, Bank>,
     events: HashMap<EventId, Event>,
     global_parameters: HashMap<ParameterId, ParameterValue>,
+    emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
     active_instances: HashMap<EventInstanceId, ActiveEventInstance>,
     next_event_instance_id: u64,
+    next_emitter_id: u64,
 }
 
 impl SonaraRuntime {
@@ -107,7 +117,7 @@ impl SonaraRuntime {
         let event_ids = bank.events.clone();
 
         for event_id in &event_ids {
-            self.events.remove(&event_id);
+            self.events.remove(event_id);
         }
 
         self.active_instances
@@ -121,45 +131,56 @@ impl SonaraRuntime {
         self.banks.contains_key(&bank_id)
     }
 
+    /// 创建一个新的 emitter
+    pub fn create_emitter(&mut self) -> EmitterId {
+        let emitter_id = EmitterId(self.next_emitter_id);
+        self.next_emitter_id += 1;
+        self.emitter_parameters.insert(emitter_id, HashMap::new());
+        emitter_id
+    }
+
+    /// 删除一个 emitter
+    pub fn remove_emitter(&mut self, emitter_id: EmitterId) -> Result<(), RuntimeError> {
+        self.emitter_parameters
+            .remove(&emitter_id)
+            .map(|_| ())
+            .ok_or(RuntimeError::EmitterNotFound(emitter_id))
+    }
+
     /// 播放一个未绑定实体的事件
     pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
-        let plan = self.plan_event(event_id)?;
-        let instance_id = EventInstanceId(self.next_event_instance_id);
-        self.next_event_instance_id += 1;
+        self.play_internal(event_id, None)
+    }
 
-        self.active_instances.insert(
-            instance_id,
-            ActiveEventInstance {
-                id: instance_id,
-                event_id,
-                plan,
-            },
-        );
+    /// 在 emitter 上播放一个事件
+    pub fn play_on(
+        &mut self,
+        emitter_id: EmitterId,
+        event_id: EventId,
+    ) -> Result<EventInstanceId, RuntimeError> {
+        if !self.emitter_parameters.contains_key(&emitter_id) {
+            return Err(RuntimeError::EmitterNotFound(emitter_id));
+        }
 
-        Ok(instance_id)
+        self.play_internal(event_id, Some(emitter_id))
     }
 
     /// 在不创建实例的情况下解析一个事件
     pub fn plan_event(&self, event_id: EventId) -> Result<PlaybackPlan, RuntimeError> {
-        let event = self
-            .events
-            .get(&event_id)
-            .ok_or(RuntimeError::EventNotLoaded(event_id))?;
+        self.plan_event_for_emitter(None, event_id)
+    }
 
-        let node_lookup: HashMap<NodeId, &EventContentNode> = event
-            .root
-            .nodes
-            .iter()
-            .map(|node| (node.id(), node))
-            .collect();
-        let mut asset_ids = Vec::new();
+    /// 在指定 emitter 上解析一个事件
+    pub fn plan_event_on(
+        &self,
+        emitter_id: EmitterId,
+        event_id: EventId,
+    ) -> Result<PlaybackPlan, RuntimeError> {
+        if !self.emitter_parameters.contains_key(&emitter_id) {
+            return Err(RuntimeError::EmitterNotFound(emitter_id));
+        }
 
-        self.resolve_node(&node_lookup, event.root.root, &mut asset_ids)?;
-
-        Ok(PlaybackPlan {
-            event_id,
-            asset_ids,
-        })
+        self.plan_event_for_emitter(Some(emitter_id), event_id)
     }
 
     /// 停止一个事件实例
@@ -192,6 +213,33 @@ impl SonaraRuntime {
         self.global_parameters.get(&parameter_id)
     }
 
+    /// 设置 emitter 参数
+    pub fn set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) -> Result<(), RuntimeError> {
+        let parameters = self
+            .emitter_parameters
+            .get_mut(&emitter_id)
+            .ok_or(RuntimeError::EmitterNotFound(emitter_id))?;
+
+        parameters.insert(parameter_id, value);
+        Ok(())
+    }
+
+    /// 读取 emitter 参数
+    pub fn emitter_param(
+        &self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+    ) -> Option<&ParameterValue> {
+        self.emitter_parameters
+            .get(&emitter_id)
+            .and_then(|parameters| parameters.get(&parameter_id))
+    }
+
     /// 压入一个 snapshot
     pub fn push_snapshot(
         &mut self,
@@ -201,9 +249,59 @@ impl SonaraRuntime {
         Ok(SnapshotInstanceId(0))
     }
 
+    fn play_internal(
+        &mut self,
+        event_id: EventId,
+        emitter_id: Option<EmitterId>,
+    ) -> Result<EventInstanceId, RuntimeError> {
+        let plan = self.plan_event_for_emitter(emitter_id, event_id)?;
+        let instance_id = EventInstanceId(self.next_event_instance_id);
+        self.next_event_instance_id += 1;
+
+        self.active_instances.insert(
+            instance_id,
+            ActiveEventInstance {
+                id: instance_id,
+                event_id,
+                emitter_id,
+                plan,
+            },
+        );
+
+        Ok(instance_id)
+    }
+
+    fn plan_event_for_emitter(
+        &self,
+        emitter_id: Option<EmitterId>,
+        event_id: EventId,
+    ) -> Result<PlaybackPlan, RuntimeError> {
+        let event = self
+            .events
+            .get(&event_id)
+            .ok_or(RuntimeError::EventNotLoaded(event_id))?;
+
+        let node_lookup: HashMap<NodeId, &EventContentNode> = event
+            .root
+            .nodes
+            .iter()
+            .map(|node| (node.id(), node))
+            .collect();
+        let mut asset_ids = Vec::new();
+
+        self.resolve_node(&node_lookup, emitter_id, event.root.root, &mut asset_ids)?;
+
+        Ok(PlaybackPlan {
+            event_id,
+            emitter_id,
+            asset_ids,
+        })
+    }
+
     fn resolve_node(
         &self,
         node_lookup: &HashMap<NodeId, &EventContentNode>,
+        emitter_id: Option<EmitterId>,
         node_ref: NodeRef,
         asset_ids: &mut Vec<Uuid>,
     ) -> Result<(), RuntimeError> {
@@ -218,38 +316,56 @@ impl SonaraRuntime {
             EventContentNode::Random(node) => {
                 // v0 先固定选择第一个分支, 让规划结果可预测且方便测试
                 if let Some(child) = node.children.first().copied() {
-                    self.resolve_node(node_lookup, child, asset_ids)?;
+                    self.resolve_node(node_lookup, emitter_id, child, asset_ids)?;
                 }
             }
             EventContentNode::Sequence(node) | EventContentNode::Layer(node) => {
                 for child in &node.children {
-                    self.resolve_node(node_lookup, *child, asset_ids)?;
+                    self.resolve_node(node_lookup, emitter_id, *child, asset_ids)?;
                 }
             }
             EventContentNode::Switch(node) => {
-                let selected = match self.global_parameters.get(&node.parameter_id) {
-                    Some(ParameterValue::Enum(variant)) => node
-                        .cases
-                        .iter()
-                        .find(|case| case.variant == *variant)
-                        .map(|case| case.child)
-                        .or(node.default_case),
-                    Some(_) => {
-                        return Err(RuntimeError::SwitchParameterTypeMismatch(node.parameter_id));
-                    }
-                    None => node.default_case,
-                }
-                .ok_or(RuntimeError::NoMatchingSwitchCase(node.parameter_id))?;
+                let selected = self
+                    .resolve_switch_target(emitter_id, node.parameter_id, node)
+                    .and_then(|selected| {
+                        selected.ok_or(RuntimeError::NoMatchingSwitchCase(node.parameter_id))
+                    })?;
 
-                self.resolve_node(node_lookup, selected, asset_ids)?;
+                self.resolve_node(node_lookup, emitter_id, selected, asset_ids)?;
             }
             EventContentNode::Loop(node) => {
                 // v0 只为 loop 规划一次内容
-                self.resolve_node(node_lookup, node.child, asset_ids)?;
+                self.resolve_node(node_lookup, emitter_id, node.child, asset_ids)?;
             }
         }
 
         Ok(())
+    }
+
+    fn resolve_switch_target(
+        &self,
+        emitter_id: Option<EmitterId>,
+        parameter_id: ParameterId,
+        node: &sonara_model::SwitchNode,
+    ) -> Result<Option<NodeRef>, RuntimeError> {
+        let parameter_value = emitter_id
+            .and_then(|emitter_id| self.emitter_param(emitter_id, parameter_id))
+            .or_else(|| self.global_param(parameter_id));
+
+        let selected = match parameter_value {
+            Some(ParameterValue::Enum(variant)) => node
+                .cases
+                .iter()
+                .find(|case| case.variant == *variant)
+                .map(|case| case.child)
+                .or(node.default_case),
+            Some(_) => {
+                return Err(RuntimeError::SwitchParameterTypeMismatch(parameter_id));
+            }
+            None => node.default_case,
+        };
+
+        Ok(selected)
     }
 }
 
@@ -304,6 +420,7 @@ mod tests {
             runtime.active_plan(instance_id),
             Some(&PlaybackPlan {
                 event_id,
+                emitter_id: None,
                 asset_ids: vec![asset_id],
             })
         );
@@ -357,6 +474,63 @@ mod tests {
         let plan = runtime.plan_event(event_id).expect("plan should resolve");
 
         assert_eq!(plan.asset_ids, vec![stone_asset]);
+    }
+
+    #[test]
+    fn plan_event_on_prefers_emitter_param_over_global_param() {
+        let event_id = EventId::new();
+        let surface_id = ParameterId::new();
+        let switch_id = NodeId::new();
+        let wood_asset = Uuid::now_v7();
+        let stone_asset = Uuid::now_v7();
+        let (wood_node_id, wood_sampler) = make_sampler(wood_asset);
+        let (stone_node_id, stone_sampler) = make_sampler(stone_asset);
+
+        let event = make_event(
+            event_id,
+            switch_id,
+            vec![
+                EventContentNode::Switch(SwitchNode {
+                    id: switch_id,
+                    parameter_id: surface_id,
+                    cases: vec![
+                        SwitchCase {
+                            variant: "wood".into(),
+                            child: NodeRef { id: wood_node_id },
+                        },
+                        SwitchCase {
+                            variant: "stone".into(),
+                            child: NodeRef { id: stone_node_id },
+                        },
+                    ],
+                    default_case: Some(NodeRef { id: wood_node_id }),
+                }),
+                wood_sampler,
+                stone_sampler,
+            ],
+        );
+
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+        let emitter_id = runtime.create_emitter();
+        runtime
+            .set_global_param(surface_id, ParameterValue::Enum("wood".into()))
+            .expect("param should set");
+        runtime
+            .set_emitter_param(emitter_id, surface_id, ParameterValue::Enum("stone".into()))
+            .expect("emitter param should set");
+
+        let plan = runtime
+            .plan_event_on(emitter_id, event_id)
+            .expect("plan should resolve");
+
+        assert_eq!(plan.asset_ids, vec![stone_asset]);
+        assert_eq!(plan.emitter_id, Some(emitter_id));
     }
 
     #[test]

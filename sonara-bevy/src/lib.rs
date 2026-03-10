@@ -1,7 +1,9 @@
 //! Bevy 集成层骨架
 
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
-use sonara_runtime::{EventInstanceId, Fade, RuntimeError, SnapshotInstanceId, SonaraRuntime};
+use sonara_runtime::{
+    EmitterId, EventInstanceId, Fade, RuntimeError, SnapshotInstanceId, SonaraRuntime,
+};
 
 /// Sonara 的 Bevy 插件入口
 #[derive(Debug, Default)]
@@ -33,6 +35,20 @@ impl SonaraAudio {
         self.runtime.play(event_id)
     }
 
+    /// 创建一个 emitter
+    pub fn create_emitter(&mut self) -> EmitterId {
+        self.runtime.create_emitter()
+    }
+
+    /// 在 emitter 上播放一个事件
+    pub fn play_on(
+        &mut self,
+        emitter_id: EmitterId,
+        event_id: EventId,
+    ) -> Result<EventInstanceId, RuntimeError> {
+        self.runtime.play_on(emitter_id, event_id)
+    }
+
     /// 设置一个全局参数
     pub fn set_global_param(
         &mut self,
@@ -40,6 +56,17 @@ impl SonaraAudio {
         value: ParameterValue,
     ) -> Result<(), RuntimeError> {
         self.runtime.set_global_param(parameter_id, value)
+    }
+
+    /// 设置 emitter 参数
+    pub fn set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) -> Result<(), RuntimeError> {
+        self.runtime
+            .set_emitter_param(emitter_id, parameter_id, value)
     }
 
     /// 停止一个事件实例
