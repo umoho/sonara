@@ -1,6 +1,6 @@
 //! Sonara 编辑器最小壳子。
 //!
-//! 当前阶段只打通 authoring 项目读取和 compiled bank 导出流程。
+//! 当前阶段只打通authoring项目读取和compiled bank导出流程。
 
 mod i18n;
 
@@ -101,6 +101,7 @@ pub struct EditorState {
     pub selected_bank_name: Option<String>,
     pub validation_report: ValidationReport,
     pub last_export: Option<ExportReport>,
+    pub has_unsaved_changes: bool,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
 }
@@ -124,10 +125,11 @@ impl EditorState {
 
                 ui.horizontal(|ui| {
                     ui.label(self.tx(TextKey::ProjectPath));
-                    ui.add(
-                        TextEdit::singleline(&mut self.project_path)
-                            .desired_width(f32::INFINITY)
-                            .hint_text(project_path_hint),
+                    let reserved_width = 360.0;
+                    let available_width = (ui.available_width() - reserved_width).max(220.0);
+                    ui.add_sized(
+                        [available_width, ui.spacing().interact_size.y],
+                        TextEdit::singleline(&mut self.project_path).hint_text(project_path_hint),
                     );
 
                     if ui.button(load_project_label).clicked() {
@@ -155,6 +157,18 @@ impl EditorState {
                 if !self.status_message.is_empty() {
                     ui.label(RichText::new(&self.status_message).color(Color32::LIGHT_BLUE));
                 }
+
+                let dirty_label = if self.has_unsaved_changes {
+                    self.tx(TextKey::UnsavedChanges)
+                } else {
+                    self.tx(TextKey::SavedStateClean)
+                };
+                let dirty_color = if self.has_unsaved_changes {
+                    Color32::YELLOW
+                } else {
+                    Color32::LIGHT_GREEN
+                };
+                ui.label(RichText::new(dirty_label).color(dirty_color));
             });
     }
 
@@ -216,94 +230,119 @@ impl EditorState {
 
     fn draw_center_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading(self.tx(TextKey::BankExport));
-            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.heading(self.tx(TextKey::BankExport));
+                ui.separator();
 
-            let Some(project) = &self.loaded_project else {
-                ui.label(self.tx(TextKey::LoadProjectFirst));
-                return;
-            };
+                let Some(project) = &self.loaded_project else {
+                    ui.label(self.tx(TextKey::LoadProjectFirst));
+                    return;
+                };
 
-            let Some(selected_bank_name) = self.selected_bank_name.clone() else {
-                ui.label(self.tx(TextKey::SelectBankFirst));
-                return;
-            };
+                let Some(selected_bank_name) = self.selected_bank_name.clone() else {
+                    ui.label(self.tx(TextKey::SelectBankFirst));
+                    return;
+                };
 
-            let Some(bank) = project.bank_named(&selected_bank_name) else {
-                ui.colored_label(Color32::RED, self.tx(TextKey::SelectedBankMissing));
-                return;
-            };
+                let Some(bank) = project.bank_named(&selected_bank_name) else {
+                    ui.colored_label(Color32::RED, self.tx(TextKey::SelectedBankMissing));
+                    return;
+                };
 
-            ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank.name));
-            ui.label(format!(
-                "{}: {}",
-                self.tx(TextKey::EventCount),
-                bank.events.len()
-            ));
-            ui.label(format!(
-                "{}: {}",
-                self.tx(TextKey::BusCount),
-                bank.buses.len()
-            ));
-            ui.label(format!(
-                "{}: {}",
-                self.tx(TextKey::SnapshotCount),
-                bank.snapshots.len()
-            ));
+                ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank.name));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::EventCount),
+                    bank.events.len()
+                ));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::BusCount),
+                    bank.buses.len()
+                ));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::SnapshotCount),
+                    bank.snapshots.len()
+                ));
 
-            ui.add_space(8.0);
-            let output_path_hint = self.tx(TextKey::OutputPathHint);
-            ui.label(self.tx(TextKey::OutputPath));
-            ui.add(
-                TextEdit::singleline(&mut self.export_path)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(output_path_hint),
-            );
+                ui.add_space(8.0);
+                let output_path_hint = self.tx(TextKey::OutputPathHint);
+                ui.label(self.tx(TextKey::OutputPath));
+                ui.add(
+                    TextEdit::singleline(&mut self.export_path)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(output_path_hint),
+                );
 
-            ui.add_space(12.0);
-            self.draw_validation_report(ui);
+                ui.add_space(12.0);
+                self.draw_validation_report(ui);
 
-            ui.add_space(8.0);
-            let mut should_export = false;
-            let mut should_reset_export_path = false;
-            let can_export =
-                self.validation_report.can_export() && !self.export_path.trim().is_empty();
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        can_export,
-                        egui::Button::new(self.tx(TextKey::ExportCompiledBank)),
-                    )
-                    .clicked()
-                {
-                    should_export = true;
+                ui.add_space(8.0);
+                let mut should_export = false;
+                let mut should_reset_export_path = false;
+                let mut should_save_project = false;
+                let can_export =
+                    self.validation_report.can_export() && !self.export_path.trim().is_empty();
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            can_export,
+                            egui::Button::new(self.tx(TextKey::ExportCompiledBank)),
+                        )
+                        .clicked()
+                    {
+                        should_export = true;
+                    }
+
+                    if ui
+                        .button(self.tx(TextKey::ResetDefaultExportPath))
+                        .clicked()
+                    {
+                        should_reset_export_path = true;
+                    }
+
+                    let save_button_label = if self.has_unsaved_changes {
+                        self.tx(TextKey::SaveProject)
+                    } else {
+                        self.tx(TextKey::SaveProjectDisabled)
+                    };
+                    if ui
+                        .add_enabled(
+                            self.has_unsaved_changes,
+                            egui::Button::new(save_button_label),
+                        )
+                        .clicked()
+                    {
+                        should_save_project = true;
+                    }
+                });
+
+                if should_export {
+                    self.export_selected_bank();
                 }
 
-                if ui
-                    .button(self.tx(TextKey::ResetDefaultExportPath))
-                    .clicked()
-                {
-                    should_reset_export_path = true;
+                if should_reset_export_path {
+                    self.export_path = self.suggest_export_path(&selected_bank_name);
                 }
+
+                if should_save_project {
+                    self.save_project();
+                }
+
+                ui.add_space(12.0);
+                ui.group(|ui| {
+                    ui.label(RichText::new(self.tx(TextKey::ExportGuide)).strong());
+                    ui.label(self.tx(TextKey::ExportGuideLine1));
+                    ui.label(self.tx(TextKey::ExportGuideLine2));
+                });
+
+                ui.add_space(12.0);
+                self.draw_event_bank_editor(ui);
+
+                ui.add_space(12.0);
+                self.draw_export_report(ui);
             });
-
-            if should_export {
-                self.export_selected_bank();
-            }
-
-            if should_reset_export_path {
-                self.export_path = self.suggest_export_path(&selected_bank_name);
-            }
-
-            ui.add_space(12.0);
-            ui.group(|ui| {
-                ui.label(RichText::new(self.tx(TextKey::ExportGuide)).strong());
-                ui.label(self.tx(TextKey::ExportGuideLine1));
-                ui.label(self.tx(TextKey::ExportGuideLine2));
-            });
-
-            ui.add_space(12.0);
-            self.draw_export_report(ui);
         });
     }
 
@@ -489,6 +528,7 @@ impl EditorState {
             Ok(project) => {
                 self.loaded_project = Some(project);
                 self.last_export = None;
+                self.has_unsaved_changes = false;
                 self.refresh_validation();
                 self.status_message = self.tr(TextTemplate::ProjectLoaded {
                     path: self.project_path.clone(),
@@ -514,6 +554,7 @@ impl EditorState {
                 self.loaded_project = None;
                 self.selected_bank_name = None;
                 self.validation_report = ValidationReport::default();
+                self.has_unsaved_changes = false;
                 self.status_message = self.tr(TextTemplate::LoadFailed {
                     error: render_project_error(&error),
                 });
@@ -533,6 +574,38 @@ impl EditorState {
         self.status_message = self.tr(TextTemplate::SelectBank {
             bank_name: bank_name.to_owned(),
         });
+    }
+
+    /// 保存当前项目文件。
+    pub fn save_project(&mut self) {
+        let Some(project) = &self.loaded_project else {
+            self.status_message = self.tr(TextTemplate::SaveFailed {
+                error: "尚未加载项目".to_owned(),
+            });
+            return;
+        };
+
+        match project.write_json_file(&self.project_path) {
+            Ok(()) => {
+                self.has_unsaved_changes = false;
+                self.status_message = self.tr(TextTemplate::SaveSucceeded {
+                    path: self.project_path.clone(),
+                });
+                self.push_info_log(self.tr(TextTemplate::SaveSucceeded {
+                    path: self.project_path.clone(),
+                }));
+            }
+            Err(error) => {
+                let rendered_error = render_project_error(&error);
+                self.status_message = self.tr(TextTemplate::SaveFailed {
+                    error: rendered_error.clone(),
+                });
+                self.push_error_log(self.tr(TextTemplate::SaveFailedLog {
+                    path: self.project_path.clone(),
+                    error: rendered_error,
+                }));
+            }
+        }
     }
 
     /// 导出当前选中的 bank。
@@ -624,6 +697,134 @@ impl EditorState {
 
     fn push_error_log(&mut self, message: String) {
         self.logs.push(LogEntry::new(LogLevel::Error, message));
+    }
+
+    fn draw_event_bank_editor(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = &self.loaded_project else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.clone() else {
+            return;
+        };
+
+        let Some(bank) = project.bank_named(&bank_name) else {
+            return;
+        };
+
+        let bank_event_ids = bank.events.clone();
+        let current_bank_name = bank.name.to_string();
+        let current_bank_events: Vec<(String, sonara_model::EventId)> = project
+            .events
+            .iter()
+            .filter(|event| bank_event_ids.contains(&event.id))
+            .map(|event| (event.name.to_string(), event.id))
+            .collect();
+        let available_events: Vec<(String, sonara_model::EventId)> = project
+            .events
+            .iter()
+            .filter(|event| !bank_event_ids.contains(&event.id))
+            .map(|event| (event.name.to_string(), event.id))
+            .collect();
+
+        let mut event_to_remove = None;
+        let mut event_to_add = None;
+
+        ui.group(|ui| {
+            ui.label(RichText::new(self.tx(TextKey::EventEditor)).strong());
+            ui.label(self.tx(TextKey::CurrentBankEvents));
+
+            if current_bank_events.is_empty() {
+                ui.label(self.tx(TextKey::NoEvents));
+            } else {
+                for (event_name, event_id) in &current_bank_events {
+                    ui.horizontal(|ui| {
+                        ui.label(event_name);
+                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
+                            event_to_remove = Some((event_name.clone(), *event_id));
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::AvailableEvents)).strong());
+
+            if available_events.is_empty() {
+                ui.label(self.tx(TextKey::NoAvailableEvents));
+            } else {
+                for (event_name, event_id) in &available_events {
+                    ui.horizontal(|ui| {
+                        ui.label(event_name);
+                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
+                            event_to_add = Some((event_name.clone(), *event_id));
+                        }
+                    });
+                }
+            }
+        });
+
+        if let Some((event_name, event_id)) = event_to_remove {
+            self.remove_event_from_selected_bank(event_id);
+            self.status_message = self.tr(TextTemplate::RemovedEventFromBank {
+                event_name: event_name.clone(),
+                bank_name: current_bank_name.clone(),
+            });
+            self.push_info_log(self.tr(TextTemplate::RemovedEventFromBank {
+                event_name,
+                bank_name: current_bank_name.clone(),
+            }));
+        }
+
+        if let Some((event_name, event_id)) = event_to_add {
+            self.add_event_to_selected_bank(event_id);
+            self.status_message = self.tr(TextTemplate::AddedEventToBank {
+                event_name: event_name.clone(),
+                bank_name: current_bank_name.clone(),
+            });
+            self.push_info_log(self.tr(TextTemplate::AddedEventToBank {
+                event_name,
+                bank_name: current_bank_name,
+            }));
+        }
+    }
+
+    fn add_event_to_selected_bank(&mut self, event_id: sonara_model::EventId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        if !bank.events.contains(&event_id) {
+            bank.events.push(event_id);
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
+    }
+
+    fn remove_event_from_selected_bank(&mut self, event_id: sonara_model::EventId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        let original_len = bank.events.len();
+        bank.events.retain(|id| *id != event_id);
+        if bank.events.len() != original_len {
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
     }
 
     fn refresh_validation(&mut self) {
@@ -800,9 +1001,9 @@ fn render_build_error(error: BuildError) -> String {
         BuildError::MissingChildNode => "节点引用了不存在的子节点".to_owned(),
         BuildError::EmptyContainer => "容器节点必须至少包含一个子节点".to_owned(),
         BuildError::MissingAudioAsset => "事件引用了不存在的音频资源".to_owned(),
-        BuildError::MissingEventDefinition => "音频包引用了不存在的事件".to_owned(),
-        BuildError::MissingBusDefinition => "音频包引用了不存在的总线".to_owned(),
-        BuildError::MissingSnapshotDefinition => "音频包引用了不存在的快照".to_owned(),
+        BuildError::MissingEventDefinition => "Bank引用了不存在的事件".to_owned(),
+        BuildError::MissingBusDefinition => "Bank引用了不存在的总线".to_owned(),
+        BuildError::MissingSnapshotDefinition => "Bank引用了不存在的快照".to_owned(),
     }
 }
 
@@ -852,7 +1053,7 @@ pub struct ExportReport {
     pub error_message: Option<String>,
 }
 
-/// 当前选中音频包的导出前校验结果。
+/// 当前选中Bank的导出前校验结果。
 #[derive(Debug, Clone, Default)]
 pub struct ValidationReport {
     pub issues: Vec<String>,

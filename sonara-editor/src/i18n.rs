@@ -54,6 +54,10 @@ pub enum TextKey {
     ExportGuide,
     ExportGuideLine1,
     ExportGuideLine2,
+    SaveProject,
+    SaveProjectDisabled,
+    UnsavedChanges,
+    SavedStateClean,
     Validation,
     ValidationReady,
     ValidationBlocked,
@@ -73,6 +77,12 @@ pub enum TextKey {
     Spatial,
     NodeCount,
     ResolvedAssetCount,
+    EventEditor,
+    CurrentBankEvents,
+    AvailableEvents,
+    AddToBank,
+    RemoveFromBank,
+    NoAvailableEvents,
     NoEvents,
     NoBuses,
     NoSnapshots,
@@ -127,6 +137,24 @@ pub enum TextTemplate {
         path: String,
         error: String,
     },
+    SaveSucceeded {
+        path: String,
+    },
+    SaveFailed {
+        error: String,
+    },
+    SaveFailedLog {
+        path: String,
+        error: String,
+    },
+    AddedEventToBank {
+        event_name: String,
+        bank_name: String,
+    },
+    RemovedEventFromBank {
+        event_name: String,
+        bank_name: String,
+    },
 }
 
 /// 返回静态文案。
@@ -156,13 +184,13 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::Name => "名称",
         TextKey::Assets => "资源",
         TextKey::Events => "事件",
-        TextKey::Banks => "音频包",
-        TextKey::BankList => "音频包列表",
-        TextKey::BankExport => "音频包导出",
+        TextKey::Banks => "Bank",
+        TextKey::BankList => "Bank列表",
+        TextKey::BankExport => "Bank导出",
         TextKey::LoadProjectFirst => "请先加载一个项目文件",
-        TextKey::SelectBankFirst => "请先从左侧选择一个音频包",
-        TextKey::SelectedBankMissing => "当前选中的音频包已不存在",
-        TextKey::CurrentBank => "当前音频包",
+        TextKey::SelectBankFirst => "请先从左侧选择一个Bank",
+        TextKey::SelectedBankMissing => "当前选中的Bank已不存在",
+        TextKey::CurrentBank => "当前Bank",
         TextKey::EventCount => "事件数量",
         TextKey::BusCount => "总线数量",
         TextKey::SnapshotCount => "快照数量",
@@ -170,12 +198,18 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::ResidentMediaCount => "常驻资源数量",
         TextKey::StreamingMediaCount => "流式资源数量",
         TextKey::OutputPath => "输出路径",
-        TextKey::OutputPathHint => "输入导出的编译结果路径",
-        TextKey::ExportCompiledBank => "导出编译结果",
-        TextKey::ResetDefaultExportPath => "重置默认输出路径",
+        TextKey::OutputPathHint => "输入导出的compiled bank JSON路径",
+        TextKey::ExportCompiledBank => "导出",
+        TextKey::ResetDefaultExportPath => "重置路径为默认",
         TextKey::ExportGuide => "导出说明",
-        TextKey::ExportGuideLine1 => "编辑器读取的是项目文件",
-        TextKey::ExportGuideLine2 => "导出按钮会调用 sonara-build 生成运行时使用的编译结果 JSON",
+        TextKey::ExportGuideLine1 => "编辑器读取的是project.json",
+        TextKey::ExportGuideLine2 => {
+            "导出按钮会调用sonara-build生成runtime使用的compiled bank JSON"
+        }
+        TextKey::SaveProject => "保存项目",
+        TextKey::SaveProjectDisabled => "无可保存变更",
+        TextKey::UnsavedChanges => "有未保存变更",
+        TextKey::SavedStateClean => "已保存",
         TextKey::Validation => "校验结果",
         TextKey::ValidationReady => "可导出",
         TextKey::ValidationBlocked => "不可导出",
@@ -188,13 +222,19 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::FileSizeBytes => "文件大小",
         TextKey::Inspector => "检查器",
         TextKey::NoProjectLoadedShort => "尚未加载项目",
-        TextKey::NoBankSelected => "尚未选择音频包",
+        TextKey::NoBankSelected => "尚未选择Bank",
         TextKey::Buses => "总线",
         TextKey::Snapshots => "快照",
         TextKey::Kind => "类型",
         TextKey::Spatial => "空间化",
         TextKey::NodeCount => "节点数量",
         TextKey::ResolvedAssetCount => "引用资源数量",
+        TextKey::EventEditor => "事件编辑",
+        TextKey::CurrentBankEvents => "当前Bank中的事件",
+        TextKey::AvailableEvents => "可加入的事件",
+        TextKey::AddToBank => "加入Bank",
+        TextKey::RemoveFromBank => "移除",
+        TextKey::NoAvailableEvents => "没有可加入的事件",
         TextKey::NoEvents => "无事件",
         TextKey::NoBuses => "无总线",
         TextKey::NoSnapshots => "无快照",
@@ -234,13 +274,17 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::StreamingMediaCount => "Streaming Media Count",
         TextKey::OutputPath => "Output Path",
         TextKey::OutputPathHint => "Enter the output path for the compiled bank JSON",
-        TextKey::ExportCompiledBank => "Export Compiled Bank",
-        TextKey::ResetDefaultExportPath => "Reset Default Output Path",
+        TextKey::ExportCompiledBank => "Export",
+        TextKey::ResetDefaultExportPath => "Reset Path to Default",
         TextKey::ExportGuide => "Export Notes",
         TextKey::ExportGuideLine1 => "The editor reads project.json.",
         TextKey::ExportGuideLine2 => {
             "The export action calls sonara-build to generate the compiled bank JSON for runtime."
         }
+        TextKey::SaveProject => "Save Project",
+        TextKey::SaveProjectDisabled => "No Changes to Save",
+        TextKey::UnsavedChanges => "Unsaved Changes",
+        TextKey::SavedStateClean => "Saved",
         TextKey::Validation => "Validation",
         TextKey::ValidationReady => "Ready",
         TextKey::ValidationBlocked => "Blocked",
@@ -260,6 +304,12 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::Spatial => "Spatial",
         TextKey::NodeCount => "Node Count",
         TextKey::ResolvedAssetCount => "Referenced Asset Count",
+        TextKey::EventEditor => "Event Editor",
+        TextKey::CurrentBankEvents => "Events in Current Bank",
+        TextKey::AvailableEvents => "Available Events",
+        TextKey::AddToBank => "Add to Bank",
+        TextKey::RemoveFromBank => "Remove",
+        TextKey::NoAvailableEvents => "No available events to add.",
         TextKey::NoEvents => "No events.",
         TextKey::NoBuses => "No buses.",
         TextKey::NoSnapshots => "No snapshots.",
@@ -279,9 +329,9 @@ fn template_zh_cn(template: TextTemplate) -> String {
         TextTemplate::ProjectLoaded { path } => format!("已加载项目: {path}"),
         TextTemplate::LoadFailed { error } => format!("加载失败: {error}"),
         TextTemplate::LoadSucceeded { path } => format!("项目加载成功: {path}"),
-        TextTemplate::SelectBank { bank_name } => format!("已选择音频包: {bank_name}"),
+        TextTemplate::SelectBank { bank_name } => format!("已选择Bank: {bank_name}"),
         TextTemplate::ExportFailedNoProject => "导出失败: 尚未加载项目".to_owned(),
-        TextTemplate::ExportFailedNoBank => "导出失败: 尚未选择音频包".to_owned(),
+        TextTemplate::ExportFailedNoBank => "导出失败: 尚未选择Bank".to_owned(),
         TextTemplate::ExportFailedEmptyOutputPath => "导出失败: 输出路径不能为空".to_owned(),
         TextTemplate::ExportSucceeded {
             bank_name,
@@ -292,15 +342,28 @@ fn template_zh_cn(template: TextTemplate) -> String {
             bank_name,
             event_count,
             output_path,
-        } => format!("导出成功, 音频包={bank_name}, 事件数={event_count}, 输出={output_path}"),
+        } => format!("导出成功, Bank={bank_name}, 事件数={event_count}, 输出={output_path}"),
         TextTemplate::ExportFailedLog {
             bank_name,
             output_path,
             error,
-        } => format!("导出失败, 音频包={bank_name}, 输出={output_path}, 错误={error}"),
+        } => format!("导出失败, Bank={bank_name}, 输出={output_path}, 错误={error}"),
         TextTemplate::LoadFailedLog { path, error } => {
             format!("加载项目失败, 路径={path}, 错误={error}")
         }
+        TextTemplate::SaveSucceeded { path } => format!("项目保存成功: {path}"),
+        TextTemplate::SaveFailed { error } => format!("项目保存失败: {error}"),
+        TextTemplate::SaveFailedLog { path, error } => {
+            format!("保存项目失败, 路径={path}, 错误={error}")
+        }
+        TextTemplate::AddedEventToBank {
+            event_name,
+            bank_name,
+        } => format!("已将事件{event_name}加入Bank {bank_name}"),
+        TextTemplate::RemovedEventFromBank {
+            event_name,
+            bank_name,
+        } => format!("已将事件{event_name}从Bank {bank_name}移除"),
     }
 }
 
@@ -336,5 +399,18 @@ fn template_en_us(template: TextTemplate) -> String {
         TextTemplate::LoadFailedLog { path, error } => {
             format!("Failed to load project, path={path}, error={error}")
         }
+        TextTemplate::SaveSucceeded { path } => format!("Project saved: {path}"),
+        TextTemplate::SaveFailed { error } => format!("Save failed: {error}"),
+        TextTemplate::SaveFailedLog { path, error } => {
+            format!("Failed to save project, path={path}, error={error}")
+        }
+        TextTemplate::AddedEventToBank {
+            event_name,
+            bank_name,
+        } => format!("Added event {event_name} to bank {bank_name}"),
+        TextTemplate::RemovedEventFromBank {
+            event_name,
+            bank_name,
+        } => format!("Removed event {event_name} from bank {bank_name}"),
     }
 }
