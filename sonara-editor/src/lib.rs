@@ -5,6 +5,7 @@
 mod i18n;
 
 use std::{
+    fs,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -12,8 +13,10 @@ use std::{
 use eframe::egui::{self, Align, Color32, Layout, RichText, TextEdit};
 use egui_chinese_font::setup_chinese_fonts;
 use i18n::{EditorLocale, TextKey, TextTemplate, template, text};
-use sonara_build::{ProjectExportBankError, compile_project_bank_to_file};
-use sonara_model::{AuthoringProject, BankDefinition, Event, ProjectFileError};
+use sonara_build::{ProjectExportBankError, collect_event_asset_ids, compile_project_bank_to_file};
+use sonara_model::{
+    AuthoringProject, BankDefinition, Event, EventKind, ProjectFileError, SpatialMode,
+};
 
 /// 默认打开的 demo project 路径。
 pub const DEFAULT_PROJECT_PATH: &str = "sonara-app/assets/demo/project.json";
@@ -93,6 +96,7 @@ pub struct EditorState {
     pub export_path: String,
     pub loaded_project: Option<AuthoringProject>,
     pub selected_bank_name: Option<String>,
+    pub last_export: Option<ExportReport>,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
 }
@@ -282,6 +286,9 @@ impl EditorState {
                 ui.label(self.tx(TextKey::ExportGuideLine1));
                 ui.label(self.tx(TextKey::ExportGuideLine2));
             });
+
+            ui.add_space(12.0);
+            self.draw_export_report(ui);
         });
     }
 
@@ -360,11 +367,40 @@ impl EditorState {
 
         egui::ScrollArea::vertical()
             .id_salt("event_list")
-            .max_height(180.0)
+            .max_height(260.0)
             .show(ui, |ui| {
                 for event_id in &bank.events {
                     if let Some(event) = project.events.iter().find(|event| event.id == *event_id) {
-                        ui.label(format!("{} | {}", event.name, format_event_id(event)));
+                        let asset_count = collect_event_asset_ids(event).len();
+                        let summary = format!(
+                            "{} | {} | {}",
+                            event.name,
+                            format_event_kind(event.kind),
+                            format_spatial_mode(event.spatial)
+                        );
+                        ui.collapsing(summary, |ui| {
+                            ui.label(format!("ID: {}", format_event_id(event)));
+                            ui.label(format!(
+                                "{}: {}",
+                                self.tx(TextKey::Kind),
+                                format_event_kind(event.kind)
+                            ));
+                            ui.label(format!(
+                                "{}: {}",
+                                self.tx(TextKey::Spatial),
+                                format_spatial_mode(event.spatial)
+                            ));
+                            ui.label(format!(
+                                "{}: {}",
+                                self.tx(TextKey::NodeCount),
+                                event.root.nodes.len()
+                            ));
+                            ui.label(format!(
+                                "{}: {}",
+                                self.tx(TextKey::ResolvedAssetCount),
+                                asset_count
+                            ));
+                        });
                     } else {
                         ui.colored_label(
                             Color32::YELLOW,
@@ -437,6 +473,7 @@ impl EditorState {
         match AuthoringProject::read_json_file(&self.project_path) {
             Ok(project) => {
                 self.loaded_project = Some(project);
+                self.last_export = None;
                 self.status_message = self.tr(TextTemplate::ProjectLoaded {
                     path: self.project_path.clone(),
                 });
@@ -502,6 +539,20 @@ impl EditorState {
 
         match compile_project_bank_to_file(project, &bank_name, &self.export_path) {
             Ok(package) => {
+                let file_size_bytes = fs::metadata(&self.export_path)
+                    .ok()
+                    .map(|metadata| metadata.len());
+                self.last_export = Some(ExportReport::success(
+                    package.bank.name.to_string(),
+                    self.export_path.clone(),
+                    package.events.len(),
+                    package.buses.len(),
+                    package.snapshots.len(),
+                    package.bank.manifest.assets.len(),
+                    package.bank.manifest.resident_media.len(),
+                    package.bank.manifest.streaming_media.len(),
+                    file_size_bytes,
+                ));
                 self.status_message = self.tr(TextTemplate::ExportSucceeded {
                     bank_name: package.bank.name.to_string(),
                     output_path: self.export_path.clone(),
@@ -514,6 +565,11 @@ impl EditorState {
             }
             Err(error) => {
                 let rendered_error = render_export_error(&error);
+                self.last_export = Some(ExportReport::failure(
+                    bank_name.clone(),
+                    self.export_path.clone(),
+                    rendered_error.clone(),
+                ));
                 self.status_message = self.tr(TextTemplate::ExportFailed {
                     error: rendered_error.clone(),
                 });
@@ -551,6 +607,84 @@ impl EditorState {
     fn push_error_log(&mut self, message: String) {
         self.logs.push(LogEntry::new(LogLevel::Error, message));
     }
+
+    fn draw_export_report(&self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(RichText::new(self.tx(TextKey::LastExport)).strong());
+
+            let Some(report) = &self.last_export else {
+                ui.label(self.tx(TextKey::NoExportYet));
+                return;
+            };
+
+            let status_label = if report.success {
+                self.tx(TextKey::LastExportSuccess)
+            } else {
+                self.tx(TextKey::LastExportFailure)
+            };
+            let status_color = if report.success {
+                Color32::LIGHT_GREEN
+            } else {
+                Color32::LIGHT_RED
+            };
+
+            ui.label(RichText::new(status_label).color(status_color));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::CurrentBank),
+                report.bank_name
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::OutputPath),
+                report.output_path
+            ));
+
+            if let Some(error_message) = &report.error_message {
+                ui.colored_label(Color32::LIGHT_RED, error_message);
+                return;
+            }
+
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::EventCount),
+                report.event_count
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::BusCount),
+                report.bus_count
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::SnapshotCount),
+                report.snapshot_count
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::AssetCount),
+                report.asset_count
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::ResidentMediaCount),
+                report.resident_media_count
+            ));
+            ui.label(format!(
+                "{}: {}",
+                self.tx(TextKey::StreamingMediaCount),
+                report.streaming_media_count
+            ));
+
+            if let Some(file_size_bytes) = report.file_size_bytes {
+                ui.label(format!(
+                    "{}: {} B",
+                    self.tx(TextKey::FileSizeBytes),
+                    file_size_bytes
+                ));
+            }
+        });
+    }
 }
 
 fn format_event_id(event: &Event) -> String {
@@ -563,6 +697,21 @@ fn render_project_error(error: &ProjectFileError) -> String {
 
 fn render_export_error(error: &ProjectExportBankError) -> String {
     error.to_string()
+}
+
+fn format_event_kind(kind: EventKind) -> &'static str {
+    match kind {
+        EventKind::OneShot => "OneShot",
+        EventKind::Persistent => "Persistent",
+    }
+}
+
+fn format_spatial_mode(spatial: SpatialMode) -> &'static str {
+    match spatial {
+        SpatialMode::None => "None",
+        SpatialMode::TwoD => "TwoD",
+        SpatialMode::ThreeD => "ThreeD",
+    }
 }
 
 /// 编辑器日志级别。
@@ -578,6 +727,66 @@ pub struct LogEntry {
     pub timestamp: String,
     pub level: LogLevel,
     pub message: String,
+}
+
+/// 最近一次导出的摘要。
+#[derive(Debug, Clone)]
+pub struct ExportReport {
+    pub success: bool,
+    pub bank_name: String,
+    pub output_path: String,
+    pub event_count: usize,
+    pub bus_count: usize,
+    pub snapshot_count: usize,
+    pub asset_count: usize,
+    pub resident_media_count: usize,
+    pub streaming_media_count: usize,
+    pub file_size_bytes: Option<u64>,
+    pub error_message: Option<String>,
+}
+
+impl ExportReport {
+    fn success(
+        bank_name: String,
+        output_path: String,
+        event_count: usize,
+        bus_count: usize,
+        snapshot_count: usize,
+        asset_count: usize,
+        resident_media_count: usize,
+        streaming_media_count: usize,
+        file_size_bytes: Option<u64>,
+    ) -> Self {
+        Self {
+            success: true,
+            bank_name,
+            output_path,
+            event_count,
+            bus_count,
+            snapshot_count,
+            asset_count,
+            resident_media_count,
+            streaming_media_count,
+            file_size_bytes,
+            error_message: None,
+        }
+    }
+
+    fn failure(bank_name: String, output_path: String, error_message: String) -> Self {
+        Self {
+            success: false,
+            bank_name,
+            output_path,
+            event_count: 0,
+            bus_count: 0,
+            snapshot_count: 0,
+            asset_count: 0,
+            resident_media_count: 0,
+            streaming_media_count: 0,
+            file_size_bytes: None,
+            error_message: Some(error_message),
+        }
+    }
 }
 
 impl LogEntry {
