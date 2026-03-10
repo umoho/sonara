@@ -1,7 +1,19 @@
+use std::{fs, path::Path};
+
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+use thiserror::Error;
 
 use crate::{AudioAsset, BankDefinition, Bus, Event, Parameter, Snapshot};
+
+/// authoring 项目文件的最小 IO 错误。
+#[derive(Debug, Error)]
+pub enum ProjectFileError {
+    #[error("读取项目文件失败: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("项目文件 JSON 解析失败: {0}")]
+    Json(#[from] serde_json::Error),
+}
 
 /// authoring 层的项目根对象。
 ///
@@ -30,5 +42,55 @@ impl AuthoringProject {
             events: Vec::new(),
             banks: Vec::new(),
         }
+    }
+
+    /// 从 JSON 字符串读取 authoring 项目。
+    pub fn from_json_str(contents: &str) -> Result<Self, ProjectFileError> {
+        Ok(serde_json::from_str(contents)?)
+    }
+
+    /// 把项目编码成格式化 JSON 字符串。
+    pub fn to_json_string_pretty(&self) -> Result<String, ProjectFileError> {
+        Ok(serde_json::to_string_pretty(self)?)
+    }
+
+    /// 从磁盘读取一个 JSON 项目文件。
+    pub fn read_json_file(path: impl AsRef<Path>) -> Result<Self, ProjectFileError> {
+        let contents = fs::read_to_string(path)?;
+        Self::from_json_str(&contents)
+    }
+
+    /// 把项目写入磁盘上的 JSON 文件。
+    pub fn write_json_file(&self, path: impl AsRef<Path>) -> Result<(), ProjectFileError> {
+        let path = path.as_ref();
+        let contents = self.to_json_string_pretty()?;
+
+        fs::write(path, contents)?;
+        Ok(())
+    }
+
+    /// 按名称查找一个 bank 定义。
+    pub fn bank_named(&self, name: &str) -> Option<&BankDefinition> {
+        self.banks.iter().find(|bank| bank.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthoringProject;
+
+    #[test]
+    fn json_round_trip_preserves_project_name_and_bank_lookup() {
+        let mut project = AuthoringProject::new("demo");
+        project.banks.push(crate::BankDefinition::new("core"));
+
+        let json = project
+            .to_json_string_pretty()
+            .expect("project should serialize");
+        let decoded =
+            AuthoringProject::from_json_str(&json).expect("project should deserialize from JSON");
+
+        assert_eq!(decoded.name, "demo");
+        assert!(decoded.bank_named("core").is_some());
     }
 }

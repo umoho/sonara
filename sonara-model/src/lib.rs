@@ -24,5 +24,5 @@ pub use parameter::{
     BoolParameter, EnumParameter, FloatParameter, Parameter, ParameterDefaultValue, ParameterKind,
     ParameterScope, ParameterValue,
 };
-pub use project::AuthoringProject;
+pub use project::{AuthoringProject, ProjectFileError};
 pub use snapshot::{Snapshot, SnapshotTarget};

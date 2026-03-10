@@ -1,82 +1,30 @@
 use std::{thread, time::Duration};
 
-use camino::Utf8PathBuf;
-use sonara_build::build_bank;
+use sonara_build::compile_bank_definition;
 use sonara_firewheel::{FirewheelBackend, FirewheelRequestResult};
-use sonara_model::{
-    AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
-    ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
-};
+use sonara_model::{AuthoringProject, ParameterValue};
 use sonara_runtime::Fade;
-use uuid::Uuid;
 
 fn main() {
-    let surface_id = ParameterId::new();
-    let event_id = EventId::new();
-    let switch_id = NodeId::new();
-    let wood_asset = Uuid::now_v7();
-    let stone_asset = Uuid::now_v7();
-    let wood_node_id = NodeId::new();
-    let stone_node_id = NodeId::new();
-    let wood_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_wood.wav");
-    let stone_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_stone.wav");
-
-    let mut wood_audio_asset = AudioAsset::new("footstep_wood", wood_path);
-    wood_audio_asset.id = wood_asset;
-    let mut stone_audio_asset = AudioAsset::new("footstep_stone", stone_path);
-    stone_audio_asset.id = stone_asset;
-
-    let event = Event {
-        id: event_id,
-        name: "player.footstep".into(),
-        kind: EventKind::OneShot,
-        root: EventContentRoot {
-            root: NodeRef { id: switch_id },
-            nodes: vec![
-                EventContentNode::Switch(SwitchNode {
-                    id: switch_id,
-                    parameter_id: surface_id,
-                    cases: vec![
-                        SwitchCase {
-                            variant: "wood".into(),
-                            child: NodeRef { id: wood_node_id },
-                        },
-                        SwitchCase {
-                            variant: "stone".into(),
-                            child: NodeRef { id: stone_node_id },
-                        },
-                    ],
-                    default_case: Some(NodeRef { id: wood_node_id }),
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: wood_node_id,
-                    asset_id: wood_asset,
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: stone_node_id,
-                    asset_id: stone_asset,
-                }),
-            ],
-        },
-        default_bus: None,
-        spatial: SpatialMode::ThreeD,
-        default_parameters: Vec::new(),
-        voice_limit: None,
-        steal_policy: None,
-    };
-
-    let bank = build_bank(
-        "core",
-        &[event.clone()],
-        &[wood_audio_asset.clone(), stone_audio_asset.clone()],
-    )
-    .expect("bank should build");
+    let project = AuthoringProject::read_json_file("sonara-app/assets/demo/project.json")
+        .expect("demo project should load from JSON");
+    let bank_definition = project
+        .bank_named("core")
+        .expect("demo project should contain core bank");
+    let package =
+        compile_bank_definition(bank_definition, &project).expect("demo project should compile");
+    let event_id = package.events[0].id;
+    let surface_id = project.parameters[0].id();
+    let wood_asset = package.bank.manifest.assets[0].id;
+    let stone_asset = package.bank.manifest.assets[1].id;
+    let wood_path = package.bank.manifest.assets[0].source_path.clone();
+    let stone_path = package.bank.manifest.assets[1].source_path.clone();
 
     let mut backend =
         FirewheelBackend::new(Default::default()).expect("Firewheel backend should start");
     backend
-        .load_bank(bank, vec![event])
-        .expect("bank assets should decode and load");
+        .load_compiled_bank(package)
+        .expect("compiled demo package should decode and load");
 
     let emitter_id = backend.runtime_mut().create_emitter();
     backend.queue_set_emitter_param(emitter_id, surface_id, ParameterValue::Enum("stone".into()));
@@ -102,9 +50,10 @@ fn main() {
     println!("Sonara demo");
     println!("event: player.footstep");
     println!("emitter: {:?}", plan.emitter_id);
+    println!("project file: sonara-app/assets/demo/project.json");
     println!("surface param: stone");
-    println!("wood file: {}", wood_audio_asset.source_path);
-    println!("stone file: {}", stone_audio_asset.source_path);
+    println!("wood file: {}", wood_path);
+    println!("stone file: {}", stone_path);
     println!("wood asset: {:?}", wood_asset);
     println!("stone asset: {:?}", stone_asset);
     println!("resolved branch: {resolved_label}");
