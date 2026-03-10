@@ -37,6 +37,13 @@ pub enum AudioRequestResult {
     ParameterSet,
 }
 
+/// 一条请求在隔离执行模式下的结果
+#[derive(Debug)]
+pub struct AudioRequestOutcome {
+    pub request: AudioRequest,
+    pub result: Result<AudioRequestResult, RuntimeError>,
+}
+
 /// Bevy 侧的全局音频入口
 #[derive(Debug, Default)]
 pub struct SonaraAudio {
@@ -211,37 +218,22 @@ impl SonaraAudio {
         let mut results = Vec::with_capacity(requests.len());
 
         for request in requests {
-            let result = match request {
-                AudioRequest::Play { event_id } => AudioRequestResult::Played {
-                    instance_id: self.runtime.play(event_id)?,
-                },
-                AudioRequest::PlayOnEmitter {
-                    emitter_id,
-                    event_id,
-                } => AudioRequestResult::Played {
-                    instance_id: self.runtime.play_on(emitter_id, event_id)?,
-                },
-                AudioRequest::SetGlobalParam {
-                    parameter_id,
-                    value,
-                } => {
-                    self.runtime.set_global_param(parameter_id, value)?;
-                    AudioRequestResult::ParameterSet
-                }
-                AudioRequest::SetEmitterParam {
-                    emitter_id,
-                    parameter_id,
-                    value,
-                } => {
-                    self.runtime
-                        .set_emitter_param(emitter_id, parameter_id, value)?;
-                    AudioRequestResult::ParameterSet
-                }
-            };
+            let result = self.apply_request(&request)?;
             results.push(result);
         }
 
         Ok(results)
+    }
+
+    /// 依次执行所有待处理请求, 单条失败不会中断整批处理
+    pub fn apply_requests_isolated(&mut self) -> Vec<AudioRequestOutcome> {
+        self.drain_requests()
+            .into_iter()
+            .map(|request| {
+                let result = self.apply_request(&request);
+                AudioRequestOutcome { request, result }
+            })
+            .collect()
     }
 
     /// 停止一个事件实例
@@ -256,6 +248,40 @@ impl SonaraAudio {
         fade: Fade,
     ) -> Result<SnapshotInstanceId, RuntimeError> {
         self.runtime.push_snapshot(snapshot_id, fade)
+    }
+
+    fn apply_request(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<AudioRequestResult, RuntimeError> {
+        match request {
+            AudioRequest::Play { event_id } => Ok(AudioRequestResult::Played {
+                instance_id: self.runtime.play(*event_id)?,
+            }),
+            AudioRequest::PlayOnEmitter {
+                emitter_id,
+                event_id,
+            } => Ok(AudioRequestResult::Played {
+                instance_id: self.runtime.play_on(*emitter_id, *event_id)?,
+            }),
+            AudioRequest::SetGlobalParam {
+                parameter_id,
+                value,
+            } => {
+                self.runtime
+                    .set_global_param(*parameter_id, value.clone())?;
+                Ok(AudioRequestResult::ParameterSet)
+            }
+            AudioRequest::SetEmitterParam {
+                emitter_id,
+                parameter_id,
+                value,
+            } => {
+                self.runtime
+                    .set_emitter_param(*emitter_id, *parameter_id, value.clone())?;
+                Ok(AudioRequestResult::ParameterSet)
+            }
+        }
     }
 }
 
@@ -405,5 +431,44 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(plan.emitter_id, emitter.id);
         assert_eq!(plan.asset_ids, vec![asset_id]);
+    }
+
+    #[test]
+    fn isolated_request_application_keeps_processing_after_error() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let surface_id = ParameterId::new();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let missing_emitter = audio.create_emitter();
+        let mut detached = AudioEmitter {
+            enabled: true,
+            id: Some(missing_emitter),
+        };
+        audio
+            .detach_emitter(&mut detached)
+            .expect("detach should succeed");
+
+        audio.queue_play_on(missing_emitter, event_id);
+        audio.queue_play(event_id);
+
+        let outcomes = audio.apply_requests_isolated();
+
+        assert_eq!(outcomes.len(), 2);
+        assert!(matches!(
+            outcomes[0].result,
+            Err(RuntimeError::EmitterNotFound(_))
+        ));
+        assert!(matches!(
+            outcomes[1].result,
+            Ok(AudioRequestResult::Played { .. })
+        ));
     }
 }
