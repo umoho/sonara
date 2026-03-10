@@ -5,6 +5,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+bevy_app = "0.18.1"
+bevy_ecs = "0.18.1"
 sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
 uuid.workspace = true

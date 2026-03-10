@@ -1,5 +1,7 @@
 //! Bevy 集成层骨架
 
+use bevy_app::{App, Plugin};
+use bevy_ecs::prelude::{Component, Resource};
 use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
@@ -9,6 +11,12 @@ use sonara_runtime::{
 /// Sonara 的 Bevy 插件入口
 #[derive(Debug, Default)]
 pub struct SonaraPlugin;
+
+impl Plugin for SonaraPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<SonaraAudio>();
+    }
+}
 
 /// Bevy 侧积累的一条音频请求
 pub type AudioRequest = RuntimeRequest;
@@ -27,7 +35,7 @@ pub struct AudioUpdate<'a> {
 }
 
 /// Bevy 侧的全局音频入口
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Resource)]
 pub struct SonaraAudio {
     runtime: SonaraRuntime,
     command_buffer: RuntimeCommandBuffer,
@@ -277,20 +285,30 @@ impl AudioUpdate<'_> {
 }
 
 /// 绑定到实体上的发声体组件
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Component)]
 pub struct AudioEmitter {
     pub enabled: bool,
     pub id: Option<EmitterId>,
 }
 
 /// 绑定到实体上的监听器组件
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Component)]
 pub struct AudioListener {
     pub enabled: bool,
 }
 
+/// 便于 Bevy 游戏侧导入的最小预导出。
+pub mod prelude {
+    pub use crate::{AudioEmitter, AudioListener, AudioUpdate, SonaraAudio, SonaraPlugin};
+}
+
 #[cfg(test)]
 mod tests {
+    use bevy_app::{App, Update};
+    use bevy_ecs::{
+        prelude::{Entity, ResMut},
+        system::Single,
+    };
     use sonara_model::{
         EventContentRoot, EventKind, NodeId, NodeRef, SamplerNode, SpatialMode, SwitchCase,
         SwitchNode,
@@ -521,5 +539,81 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(plan.emitter_id, emitter.id);
         assert_eq!(plan.asset_ids, vec![asset_id]);
+    }
+
+    #[test]
+    fn plugin_exposes_audio_resource_to_real_bevy_update_system() {
+        fn bevy_audio_system(
+            mut audio: ResMut<SonaraAudio>,
+            mut emitter: Single<&mut AudioEmitter>,
+            event_id: ResMut<TestEventId>,
+            surface_id: ResMut<TestSurfaceId>,
+            mut played: ResMut<PlayedInstance>,
+        ) {
+            let mut update = audio.begin_update();
+            update.set_emitter_param_on(
+                &mut emitter,
+                surface_id.0,
+                ParameterValue::Enum("stone".into()),
+            );
+            update.play_from_emitter(&mut emitter, event_id.0);
+            let results = update.apply().expect("update should apply");
+
+            *played = PlayedInstance(match results.last() {
+                Some(AudioRequestResult::Played { instance_id }) => Some(*instance_id),
+                other => panic!("expected final played result, got {other:?}"),
+            });
+        }
+
+        #[derive(Resource)]
+        struct TestEventId(EventId);
+
+        #[derive(Resource)]
+        struct TestSurfaceId(ParameterId);
+
+        #[derive(Resource, Default)]
+        struct PlayedInstance(Option<EventInstanceId>);
+
+        let surface_id = ParameterId::new();
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut app = App::new();
+        app.add_plugins(SonaraPlugin);
+        app.insert_resource(TestEventId(event_id));
+        app.insert_resource(TestSurfaceId(surface_id));
+        app.insert_resource(PlayedInstance::default());
+        app.world_mut().spawn(AudioEmitter::default());
+        app.world_mut()
+            .resource_mut::<SonaraAudio>()
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+        app.add_systems(Update, bevy_audio_system);
+
+        app.update();
+
+        let played = app.world().resource::<PlayedInstance>().0;
+        let instance_id = played.expect("system should have played an instance");
+        let plan = app
+            .world()
+            .resource::<SonaraAudio>()
+            .active_plan(instance_id)
+            .expect("plan should exist");
+        let plan_emitter_id = plan.emitter_id;
+        let plan_asset_ids = plan.asset_ids.clone();
+        let emitter_id = {
+            let mut query = app.world_mut().query::<(Entity, &AudioEmitter)>();
+            query
+                .single(app.world())
+                .expect("there should be one emitter entity")
+                .1
+                .id
+        };
+
+        assert_eq!(emitter_id, plan_emitter_id);
+        assert_eq!(plan_asset_ids, vec![asset_id]);
     }
 }
