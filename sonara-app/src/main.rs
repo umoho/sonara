@@ -1,7 +1,6 @@
-use std::{f32::consts::PI, fs, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use camino::Utf8PathBuf;
-use hound::{SampleFormat, WavSpec, WavWriter};
 use sonara_firewheel::FirewheelBackend;
 use sonara_model::{
     AudioAsset, Bank, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId,
@@ -18,23 +17,12 @@ fn main() {
     let stone_asset = Uuid::now_v7();
     let wood_node_id = NodeId::new();
     let stone_node_id = NodeId::new();
-    let asset_dir = std::env::temp_dir().join("sonara-demo-assets");
-    fs::create_dir_all(&asset_dir).expect("demo asset dir should create");
-    let wood_path = asset_dir.join("footstep_wood.wav");
-    let stone_path = asset_dir.join("footstep_stone.wav");
+    let wood_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_wood.wav");
+    let stone_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_stone.wav");
 
-    write_demo_wav(&wood_path, 320.0, 0.18, 0.18).expect("wood wav should write");
-    write_demo_wav(&stone_path, 880.0, 0.09, 0.12).expect("stone wav should write");
-
-    let mut wood_audio_asset = AudioAsset::new(
-        "footstep_wood",
-        Utf8PathBuf::from_path_buf(wood_path).expect("wood path should be utf8"),
-    );
+    let mut wood_audio_asset = AudioAsset::new("footstep_wood", wood_path);
     wood_audio_asset.id = wood_asset;
-    let mut stone_audio_asset = AudioAsset::new(
-        "footstep_stone",
-        Utf8PathBuf::from_path_buf(stone_path).expect("stone path should be utf8"),
-    );
+    let mut stone_audio_asset = AudioAsset::new("footstep_stone", stone_path);
     stone_audio_asset.id = stone_asset;
 
     let event = Event {
@@ -127,44 +115,4 @@ fn main() {
         backend.update().expect("backend update should succeed");
         thread::sleep(Duration::from_millis(100));
     }
-}
-
-/// 生成一个带指数衰减包络的最小测试音色
-fn generate_tone(frequency_hz: f32, duration_seconds: f32, amplitude: f32) -> Vec<f32> {
-    let sample_rate = 48_000.0;
-    let frames = (duration_seconds * sample_rate) as usize;
-    let mut data = Vec::with_capacity(frames * 2);
-
-    for frame in 0..frames {
-        let t = frame as f32 / sample_rate;
-        let envelope = (1.0 - t / duration_seconds).max(0.0).powf(2.5);
-        let sample = (2.0 * PI * frequency_hz * t).sin() * amplitude * envelope;
-        data.push(sample);
-        data.push(sample);
-    }
-
-    data
-}
-
-/// 把最小测试音色写成 wav 文件, 用于验证真实资源加载路径
-fn write_demo_wav(
-    path: &std::path::Path,
-    frequency_hz: f32,
-    duration_seconds: f32,
-    amplitude: f32,
-) -> Result<(), hound::Error> {
-    let spec = WavSpec {
-        channels: 2,
-        sample_rate: 48_000,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let mut writer = WavWriter::create(path, spec)?;
-
-    for sample in generate_tone(frequency_hz, duration_seconds, amplitude) {
-        let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        writer.write_sample(pcm)?;
-    }
-
-    writer.finalize()
 }
