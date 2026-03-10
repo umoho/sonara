@@ -5680,7 +5680,6 @@ dependencies = [
  "bevy",
  "bevy_app",
  "bevy_ecs",
- "camino",
  "sonara-build",
  "sonara-firewheel",
  "sonara-model",

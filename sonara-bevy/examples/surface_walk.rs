@@ -1,15 +1,10 @@
 use bevy::prelude::*;
-use camino::Utf8PathBuf;
 use sonara_bevy::{
     AudioRequestResult,
     prelude::{AudioEmitter, SonaraAudio, SonaraFirewheelPlugin},
 };
-use sonara_build::build_bank;
-use sonara_model::{
-    AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
-    ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
-};
-use uuid::Uuid;
+use sonara_build::CompiledBankPackage;
+use sonara_model::{EventId, ParameterId, ParameterValue};
 
 const TILE_SIZE: f32 = 2.2;
 const TILE_GAP: f32 = 0.12;
@@ -21,10 +16,7 @@ const FLOOR_Y: f32 = 0.0;
 const WALKER_HEIGHT: f32 = 0.55;
 
 fn main() {
-    let event_id = EventId::new();
-    let surface_id = ParameterId::new();
-    let wood_asset = Uuid::now_v7();
-    let stone_asset = Uuid::now_v7();
+    let demo_ids = read_demo_ids();
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -35,24 +27,61 @@ fn main() {
             ..default()
         }))
         .add_plugins(SonaraFirewheelPlugin)
-        .insert_non_send_resource(DemoIds {
-            event_id,
-            surface_id,
-            wood_asset,
-            stone_asset,
-        })
+        .insert_non_send_resource(demo_ids)
         .insert_resource(SurfaceGrid::default())
+        .insert_resource(HudState::default())
         .add_systems(Startup, setup_scene)
         .add_systems(Update, control_walker)
+        .add_systems(Update, sync_hud_text)
         .run();
 }
 
 struct DemoIds {
     event_id: EventId,
     surface_id: ParameterId,
-    wood_asset: Uuid,
-    stone_asset: Uuid,
 }
+
+fn read_demo_ids() -> DemoIds {
+    let package = CompiledBankPackage::read_json_file("sonara-app/assets/demo/core.bank.json")
+        .expect("compiled demo bank should load from JSON");
+    let event = package
+        .events()
+        .iter()
+        .find(|event| event.name == "player.footstep")
+        .expect("compiled bank should contain player.footstep");
+
+    DemoIds {
+        event_id: event.id,
+        surface_id: *event
+            .default_parameters
+            .first()
+            .expect("compiled footstep event should reference a surface parameter"),
+    }
+}
+
+#[derive(Resource)]
+struct HudState {
+    lines: Vec<String>,
+    latest_step: String,
+}
+
+impl Default for HudState {
+    fn default() -> Self {
+        Self {
+            lines: vec![
+                "Sonara surface_walk".into(),
+                "compiled bank file: sonara-app/assets/demo/core.bank.json".into(),
+                "WASD or arrow keys move the blue sphere".into(),
+                "brown tiles = wood, gray tiles = stone".into(),
+                "footsteps follow the surface under the sphere".into(),
+            ],
+            latest_step: "latest step: none".into(),
+        }
+    }
+}
+
+#[derive(Component)]
+struct HudText;
 
 #[derive(Resource)]
 struct SurfaceGrid {
@@ -135,70 +164,15 @@ struct Walker {
 fn setup_scene(
     mut commands: Commands,
     mut audio: NonSendMut<SonaraAudio>,
-    demo_ids: NonSend<DemoIds>,
     surface_grid: Res<SurfaceGrid>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let switch_id = NodeId::new();
-    let wood_node_id = NodeId::new();
-    let stone_node_id = NodeId::new();
-    let wood_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_wood.wav");
-    let stone_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_stone.wav");
-
-    let mut wood_audio_asset = AudioAsset::new("footstep_wood", wood_path);
-    wood_audio_asset.id = demo_ids.wood_asset;
-    let mut stone_audio_asset = AudioAsset::new("footstep_stone", stone_path);
-    stone_audio_asset.id = demo_ids.stone_asset;
-
-    let event = Event {
-        id: demo_ids.event_id,
-        name: "player.footstep".into(),
-        kind: EventKind::OneShot,
-        root: EventContentRoot {
-            root: NodeRef { id: switch_id },
-            nodes: vec![
-                EventContentNode::Switch(SwitchNode {
-                    id: switch_id,
-                    parameter_id: demo_ids.surface_id,
-                    cases: vec![
-                        SwitchCase {
-                            variant: "wood".into(),
-                            child: NodeRef { id: wood_node_id },
-                        },
-                        SwitchCase {
-                            variant: "stone".into(),
-                            child: NodeRef { id: stone_node_id },
-                        },
-                    ],
-                    default_case: Some(NodeRef { id: wood_node_id }),
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: wood_node_id,
-                    asset_id: demo_ids.wood_asset,
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: stone_node_id,
-                    asset_id: demo_ids.stone_asset,
-                }),
-            ],
-        },
-        default_bus: None,
-        spatial: SpatialMode::ThreeD,
-        default_parameters: Vec::new(),
-        voice_limit: None,
-        steal_policy: None,
-    };
-
-    let bank = build_bank(
-        "core",
-        &[event.clone()],
-        &[wood_audio_asset.clone(), stone_audio_asset.clone()],
-    )
-    .expect("bank should build");
+    let package = CompiledBankPackage::read_json_file("sonara-app/assets/demo/core.bank.json")
+        .expect("compiled demo bank should load from JSON");
     audio
-        .load_bank(bank, vec![event])
-        .expect("bank should load in startup system");
+        .load_compiled_bank(package)
+        .expect("compiled bank should load in startup system");
 
     let tile_mesh = meshes.add(Cuboid::new(TILE_SIZE, 0.2, TILE_SIZE));
     for z in 0..GRID_DEPTH {
@@ -255,10 +229,29 @@ fn setup_scene(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.9, -0.8, 0.0)),
     ));
 
-    println!("Sonara surface_walk");
-    println!("WASD or arrow keys move the blue sphere");
-    println!("brown tiles = wood, gray tiles = stone");
-    println!("footsteps follow the surface under the sphere");
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(16.0),
+                top: px(16.0),
+                padding: UiRect::axes(px(14.0), px(12.0)),
+                border_radius: BorderRadius::all(px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.06, 0.07, 0.09, 0.84)),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.93, 0.94, 0.97)),
+                HudText,
+            ));
+        });
 }
 
 fn control_walker(
@@ -266,6 +259,7 @@ fn control_walker(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut audio: NonSendMut<SonaraAudio>,
     demo_ids: NonSend<DemoIds>,
+    mut hud: ResMut<HudState>,
     surface_grid: Res<SurfaceGrid>,
     mut walker_query: Query<(&mut Transform, &mut Walker, &mut AudioEmitter)>,
 ) {
@@ -333,8 +327,7 @@ fn control_walker(
         let plan = audio
             .active_plan(instance_id)
             .expect("plan should exist after footstep play");
-
-        println!(
+        hud.latest_step = format!(
             "tile=({}, {}) surface={} resolved_assets={:?}",
             tile_x,
             tile_z,
@@ -345,6 +338,21 @@ fn control_walker(
 
     let step_phase = (walker.distance_since_step / FOOTSTEP_DISTANCE) * std::f32::consts::PI;
     transform.translation.y = WALKER_HEIGHT + step_phase.sin().abs() * 0.08;
+}
+
+fn sync_hud_text(hud: Res<HudState>, mut hud_query: Query<&mut Text, With<HudText>>) {
+    if !hud.is_changed() {
+        return;
+    }
+
+    let Ok(mut text) = hud_query.single_mut() else {
+        return;
+    };
+
+    let mut content = hud.lines.join("\n");
+    content.push('\n');
+    content.push_str(&hud.latest_step);
+    *text = Text::new(content);
 }
 
 fn tile_center_x(index: usize) -> f32 {

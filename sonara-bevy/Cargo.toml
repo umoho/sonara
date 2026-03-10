@@ -7,13 +7,12 @@ version.workspace = true
 [dependencies]
 bevy_app = "0.18.1"
 bevy_ecs = "0.18.1"
-camino.workspace = true
 sonara-build = { path = "../sonara-build" }
 sonara-firewheel = { path = "../sonara-firewheel" }
 sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
 thiserror.workspace = true
-uuid.workspace = true
 
 [dev-dependencies]
 bevy = "0.18.1"
+uuid.workspace = true

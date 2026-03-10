@@ -2,16 +2,12 @@ use std::{thread, time::Duration};
 
 use bevy_app::{App, Startup, Update};
 use bevy_ecs::prelude::{Commands, NonSend, NonSendMut, Query};
-use camino::Utf8PathBuf;
 use sonara_bevy::{
     AudioRequestResult,
     prelude::{AudioEmitter, SonaraAudio, SonaraFirewheelPlugin},
 };
-use sonara_build::build_bank;
-use sonara_model::{
-    AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
-    ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
-};
+use sonara_build::CompiledBankPackage;
+use sonara_model::{EventId, ParameterId, ParameterValue};
 use sonara_runtime::{EventInstanceId, Fade, PlaybackPlan};
 use uuid::Uuid;
 
@@ -29,19 +25,11 @@ struct DemoState {
 }
 
 fn main() {
-    let event_id = EventId::new();
-    let surface_id = ParameterId::new();
-    let wood_asset = Uuid::now_v7();
-    let stone_asset = Uuid::now_v7();
+    let demo_ids = read_demo_ids();
 
     let mut app = App::new();
     app.add_plugins(SonaraFirewheelPlugin);
-    app.insert_non_send_resource(DemoIds {
-        event_id,
-        surface_id,
-        wood_asset,
-        stone_asset,
-    });
+    app.insert_non_send_resource(demo_ids);
     app.insert_non_send_resource(DemoState::default());
     app.add_systems(Startup, setup_audio_demo);
     app.add_systems(Update, run_audio_demo);
@@ -55,74 +43,70 @@ fn main() {
     }
 }
 
+fn read_demo_ids() -> DemoIds {
+    let package = CompiledBankPackage::read_json_file("sonara-app/assets/demo/core.bank.json")
+        .expect("compiled demo bank should load from JSON");
+    let event = package
+        .events()
+        .iter()
+        .find(|event| event.name == "player.footstep")
+        .expect("compiled bank should contain player.footstep");
+    let wood_asset = package
+        .bank()
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.name == "footstep_wood")
+        .expect("compiled bank should contain wood asset");
+    let stone_asset = package
+        .bank()
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.name == "footstep_stone")
+        .expect("compiled bank should contain stone asset");
+
+    DemoIds {
+        event_id: event.id,
+        surface_id: *event
+            .default_parameters
+            .first()
+            .expect("compiled footstep event should reference a surface parameter"),
+        wood_asset: wood_asset.id,
+        stone_asset: stone_asset.id,
+    }
+}
+
 fn setup_audio_demo(
     mut commands: Commands,
     mut audio: NonSendMut<SonaraAudio>,
     demo_ids: NonSend<DemoIds>,
 ) {
-    let switch_id = NodeId::new();
-    let wood_node_id = NodeId::new();
-    let stone_node_id = NodeId::new();
-    let wood_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_wood.wav");
-    let stone_path = Utf8PathBuf::from("sonara-app/assets/demo/footstep_stone.wav");
-
-    let mut wood_audio_asset = AudioAsset::new("footstep_wood", wood_path);
-    wood_audio_asset.id = demo_ids.wood_asset;
-    let mut stone_audio_asset = AudioAsset::new("footstep_stone", stone_path);
-    stone_audio_asset.id = demo_ids.stone_asset;
-
-    let event = Event {
-        id: demo_ids.event_id,
-        name: "player.footstep".into(),
-        kind: EventKind::OneShot,
-        root: EventContentRoot {
-            root: NodeRef { id: switch_id },
-            nodes: vec![
-                EventContentNode::Switch(SwitchNode {
-                    id: switch_id,
-                    parameter_id: demo_ids.surface_id,
-                    cases: vec![
-                        SwitchCase {
-                            variant: "wood".into(),
-                            child: NodeRef { id: wood_node_id },
-                        },
-                        SwitchCase {
-                            variant: "stone".into(),
-                            child: NodeRef { id: stone_node_id },
-                        },
-                    ],
-                    default_case: Some(NodeRef { id: wood_node_id }),
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: wood_node_id,
-                    asset_id: demo_ids.wood_asset,
-                }),
-                EventContentNode::Sampler(SamplerNode {
-                    id: stone_node_id,
-                    asset_id: demo_ids.stone_asset,
-                }),
-            ],
-        },
-        default_bus: None,
-        spatial: SpatialMode::ThreeD,
-        default_parameters: Vec::new(),
-        voice_limit: None,
-        steal_policy: None,
-    };
-
-    let bank = build_bank(
-        "core",
-        &[event.clone()],
-        &[wood_audio_asset.clone(), stone_audio_asset.clone()],
-    )
-    .expect("bank should build");
-
+    let package = CompiledBankPackage::read_json_file("sonara-app/assets/demo/core.bank.json")
+        .expect("compiled demo bank should load from JSON");
+    let wood_asset = package
+        .bank()
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.id == demo_ids.wood_asset)
+        .expect("compiled bank should contain wood asset");
+    let stone_asset = package
+        .bank()
+        .manifest
+        .assets
+        .iter()
+        .find(|asset| asset.id == demo_ids.stone_asset)
+        .expect("compiled bank should contain stone asset");
+    let wood_path = wood_asset.source_path.clone();
+    let stone_path = stone_asset.source_path.clone();
     audio
-        .load_bank(bank, vec![event])
-        .expect("bank should load in startup system");
+        .load_compiled_bank(package)
+        .expect("compiled bank should load in startup system");
 
-    println!("wood file: {}", wood_audio_asset.source_path);
-    println!("stone file: {}", stone_audio_asset.source_path);
+    println!("compiled bank file: sonara-app/assets/demo/core.bank.json");
+    println!("wood file: {}", wood_path);
+    println!("stone file: {}", stone_path);
     println!("wood asset: {:?}", demo_ids.wood_asset);
     println!("stone asset: {:?}", demo_ids.stone_asset);
 
