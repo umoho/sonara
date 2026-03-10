@@ -599,6 +599,21 @@ impl SonaraRuntime {
         self.bus_volumes.get(&bus_id).copied()
     }
 
+    /// 读取某个事件实例当前命中的默认 bus 音量。
+    ///
+    /// 如果事件没有默认 bus，则返回 `1.0`。
+    pub fn active_bus_volume(&self, instance_id: EventInstanceId) -> Option<f32> {
+        let instance = self.active_instances.get(&instance_id)?;
+        let event = self.events.get(&instance.event_id)?;
+
+        Some(
+            event
+                .default_bus
+                .and_then(|bus_id| self.bus_volume(bus_id))
+                .unwrap_or(1.0),
+        )
+    }
+
     /// 设置 emitter 参数
     pub fn set_emitter_param(
         &mut self,
@@ -1183,5 +1198,43 @@ mod tests {
             runtime.push_snapshot(snapshot.id, Fade::IMMEDIATE),
             Err(RuntimeError::SnapshotTargetBusNotFound(_))
         ));
+    }
+
+    #[test]
+    fn active_bus_volume_follows_event_default_bus_override() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let bus_id = BusId::new();
+        let (sampler_id, sampler) = make_sampler(asset_id);
+        let mut event = make_event(event_id, sampler_id, vec![sampler]);
+        event.default_bus = Some(bus_id);
+
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+        bank.objects.buses.push(bus_id);
+
+        let snapshot = Snapshot {
+            id: SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: vec![SnapshotTarget {
+                bus_id,
+                target_volume: 0.4,
+            }],
+        };
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, vec![event.clone()])
+            .expect("bank should load");
+        runtime.load_snapshot(snapshot.clone());
+        runtime
+            .push_snapshot(snapshot.id, Fade::IMMEDIATE)
+            .expect("snapshot should push");
+
+        let instance_id = runtime.play(event.id).expect("event should play");
+
+        assert_eq!(runtime.active_bus_volume(instance_id), Some(0.4));
     }
 }

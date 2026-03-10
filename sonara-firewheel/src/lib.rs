@@ -391,9 +391,10 @@ impl FirewheelBackend {
         plan: &PlaybackPlan,
     ) -> Result<(), FirewheelBackendError> {
         self.instance_workers.remove(&instance_id);
+        let bus_volume = self.runtime.active_bus_volume(instance_id).unwrap_or(1.0);
 
         for asset_id in &plan.asset_ids {
-            self.play_asset(instance_id, *asset_id)?;
+            self.play_asset(instance_id, *asset_id, bus_volume)?;
         }
 
         self.update()?;
@@ -404,6 +405,7 @@ impl FirewheelBackend {
         &mut self,
         instance_id: EventInstanceId,
         asset_id: Uuid,
+        bus_volume: f32,
     ) -> Result<(), FirewheelBackendError> {
         let resource = self
             .sample_resources
@@ -416,7 +418,11 @@ impl FirewheelBackend {
 
         let worker =
             self.sampler_pool
-                .new_worker(&sampler, true, &mut self.context, |_fx_chain, _cx| {})?;
+                .new_worker(&sampler, true, &mut self.context, |fx_chain, cx| {
+                    let mut params = fx_chain.fx_chain.volume_pan;
+                    params.set_volume_linear(bus_volume);
+                    fx_chain.fx_chain.set_params(params, &fx_chain.node_ids, cx);
+                })?;
         self.attach_worker(instance_id, worker.worker_id);
 
         if let Some(old_worker_id) = worker.old_worker_id {
