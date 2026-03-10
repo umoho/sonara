@@ -74,8 +74,22 @@ cargo run --example minimal_bevy -p sonara-bevy
 
 - 启动真实 `bevy_app::App`
 - 加载 `SonaraFirewheelPlugin`
+- 从 `sonara-app/assets/demo/core.bank.json` 读取 compiled bank
 - 在 startup system 中加载 bank
 - 在 update system 中通过 `NonSendMut<SonaraAudio>` 设参、播放、stop
+
+交互式 3D 表面脚步 demo：
+
+```bash
+cargo run --example surface_walk -p sonara-bevy
+```
+
+这个 example 会：
+
+- 从 `sonara-app/assets/demo/core.bank.json` 读取 compiled bank
+- 启动真实 Bevy 3D 场景和 Firewheel 输出
+- 通过 `WASD` / 方向键控制球体移动
+- 在左上角 Bevy UI HUD 中显示说明和最近一次脚步解析结果
 
 注意：
 
