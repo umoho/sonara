@@ -125,6 +125,13 @@ compiled `Bank` 是运行时加载单元。
 5. runtime 消费 `Bank.objects`
 6. firewheel backend 消费 `Bank.manifest`
 
+如果调用方希望直接从 project 级入口工作, 当前也可以使用：
+
+- `compile_project_bank(...)`
+- `compile_project_bank_file(...)`
+- `compile_project_bank_to_file(...)`
+- `compile_project_bank_file_to_file(...)`
+
 当前推荐心智模型：
 
 - editor / authoring 工具读取 `AuthoringProject`

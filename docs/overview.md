@@ -52,6 +52,9 @@ Sonara 是一个面向游戏的、Rust-first 的开源交互音频中间件。
 - `validate_event(...)`
 - `build_bank(...)`
 - `build_bank_from_definition(...)`
+- `compile_bank_definition(...)`
+- `compile_bank_definition_to_file(...)`
+- `compile_project_bank_file_to_file(...)`
 
 ### `sonara-runtime`
 

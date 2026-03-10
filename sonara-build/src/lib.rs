@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use sonara_model::{
     AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Event, EventContentNode,
-    EventId, NodeId, NodeRef, Snapshot, SnapshotId, StreamingMode,
+    EventId, NodeId, NodeRef, ProjectFileError, Snapshot, SnapshotId, StreamingMode,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -278,6 +278,52 @@ pub fn compile_bank_definition_to_file(
     Ok(package)
 }
 
+/// 从一个已加载的 project 中按 bank 名称编译 compiled bank。
+pub fn compile_project_bank(
+    project: &AuthoringProject,
+    bank_name: &str,
+) -> Result<CompiledBankPackage, ProjectBuildError> {
+    let definition = project
+        .bank_named(bank_name)
+        .ok_or_else(|| ProjectBuildError::MissingBankDefinition(bank_name.to_owned()))?;
+    Ok(compile_bank_definition(definition, project)?)
+}
+
+/// 从磁盘上的 project 文件中按 bank 名称编译 compiled bank。
+pub fn compile_project_bank_file(
+    project_path: impl AsRef<Path>,
+    bank_name: &str,
+) -> Result<CompiledBankPackage, ProjectBuildError> {
+    let project = AuthoringProject::read_json_file(project_path)?;
+    compile_project_bank(&project, bank_name)
+}
+
+/// 从一个已加载的 project 中按 bank 名称导出 compiled bank 文件。
+pub fn compile_project_bank_to_file(
+    project: &AuthoringProject,
+    bank_name: &str,
+    output_path: impl AsRef<Path>,
+) -> Result<CompiledBankPackage, ProjectExportBankError> {
+    let definition = project
+        .bank_named(bank_name)
+        .ok_or_else(|| ProjectExportBankError::MissingBankDefinition(bank_name.to_owned()))?;
+    Ok(compile_bank_definition_to_file(
+        definition,
+        project,
+        output_path,
+    )?)
+}
+
+/// 从磁盘上的 project 文件中按 bank 名称导出 compiled bank 文件。
+pub fn compile_project_bank_file_to_file(
+    project_path: impl AsRef<Path>,
+    bank_name: &str,
+    output_path: impl AsRef<Path>,
+) -> Result<CompiledBankPackage, ProjectExportBankError> {
+    let project = AuthoringProject::read_json_file(project_path)?;
+    compile_project_bank_to_file(&project, bank_name, output_path)
+}
+
 /// 收集一个事件中所有被 `Sampler` 引用的资源 ID
 pub fn collect_event_asset_ids(event: &Event) -> HashSet<Uuid> {
     event
@@ -326,6 +372,28 @@ pub enum ExportBankError {
     Build(#[from] BuildError),
     #[error(transparent)]
     File(#[from] CompiledBankFileError),
+}
+
+/// project 级 bank 构建阶段错误。
+#[derive(Debug, Error)]
+pub enum ProjectBuildError {
+    #[error(transparent)]
+    ProjectFile(#[from] ProjectFileError),
+    #[error("project 中不存在名为 `{0}` 的 bank 定义")]
+    MissingBankDefinition(String),
+    #[error(transparent)]
+    Build(#[from] BuildError),
+}
+
+/// project 级 bank 导出阶段错误。
+#[derive(Debug, Error)]
+pub enum ProjectExportBankError {
+    #[error(transparent)]
+    ProjectFile(#[from] ProjectFileError),
+    #[error("project 中不存在名为 `{0}` 的 bank 定义")]
+    MissingBankDefinition(String),
+    #[error(transparent)]
+    Export(#[from] ExportBankError),
 }
 
 #[cfg(test)]
@@ -651,6 +719,74 @@ mod tests {
         assert_eq!(decoded.bank.id, package.bank.id);
         assert_eq!(decoded.bank.name, "core");
 
+        std::fs::remove_file(output_path).expect("temp compiled bank file should be removed");
+    }
+
+    #[test]
+    fn compile_project_bank_uses_named_bank_definition() {
+        let asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let sampler_id = NodeId::new();
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: asset.id,
+            })],
+            sampler_id,
+        );
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.events.push(event.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(event.id);
+        project.banks.push(definition.clone());
+
+        let package =
+            compile_project_bank(&project, "core").expect("named project bank should compile");
+
+        assert_eq!(package.bank.id, definition.id);
+        assert_eq!(package.events, vec![event]);
+    }
+
+    #[test]
+    fn compile_project_bank_file_to_file_reads_project_and_writes_output() {
+        let asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let sampler_id = NodeId::new();
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: asset.id,
+            })],
+            sampler_id,
+        );
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.events.push(event.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(event.id);
+        project.banks.push(definition);
+
+        let project_path =
+            std::env::temp_dir().join(format!("sonara-project-{}.json", Uuid::now_v7()));
+        let output_path =
+            std::env::temp_dir().join(format!("sonara-project-bank-{}.json", Uuid::now_v7()));
+
+        project
+            .write_json_file(&project_path)
+            .expect("temp project file should be written");
+
+        let package = compile_project_bank_file_to_file(&project_path, "core", &output_path)
+            .expect("project file export should succeed");
+        let decoded = CompiledBankPackage::read_json_file(&output_path)
+            .expect("exported compiled bank file should be readable");
+
+        assert_eq!(decoded.bank.id, package.bank.id);
+        assert_eq!(decoded.events, package.events);
+
+        std::fs::remove_file(project_path).expect("temp project file should be removed");
         std::fs::remove_file(output_path).expect("temp compiled bank file should be removed");
     }
 }
