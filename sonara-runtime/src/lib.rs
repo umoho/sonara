@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use sonara_model::{
-    Bank, BankId, Event, EventContentNode, EventId, NodeId, NodeRef, ParameterId, ParameterValue,
-    SnapshotId,
+    Bank, BankId, BankObjects, Event, EventContentNode, EventId, NodeId, NodeRef, ParameterId,
+    ParameterValue, SnapshotId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -276,7 +276,7 @@ pub enum RuntimeError {
 /// 面向游戏逻辑的运行时入口
 #[derive(Debug, Default)]
 pub struct SonaraRuntime {
-    banks: HashMap<BankId, Bank>,
+    banks: HashMap<BankId, BankObjects>,
     events: HashMap<EventId, Event>,
     global_parameters: HashMap<ParameterId, ParameterValue>,
     emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
@@ -294,12 +294,13 @@ impl SonaraRuntime {
     /// 加载一个 bank 和它包含的事件定义
     pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
         let bank_id = bank.id;
+        let bank_objects = bank.objects;
 
         for event in events {
             self.events.insert(event.id, event);
         }
 
-        self.banks.insert(bank_id, bank);
+        self.banks.insert(bank_id, bank_objects);
 
         Ok(bank_id)
     }
@@ -310,7 +311,7 @@ impl SonaraRuntime {
             .banks
             .remove(&bank_id)
             .ok_or(RuntimeError::BankNotLoaded(bank_id))?;
-        let event_ids = bank.objects.events.clone();
+        let event_ids = bank.events.clone();
 
         for event_id in &event_ids {
             self.events.remove(event_id);
@@ -325,6 +326,11 @@ impl SonaraRuntime {
     /// 判断某个 bank 是否已加载
     pub fn is_bank_loaded(&self, bank_id: BankId) -> bool {
         self.banks.contains_key(&bank_id)
+    }
+
+    /// 读取某个已加载 bank 的对象清单。
+    pub fn loaded_bank_objects(&self, bank_id: BankId) -> Option<&BankObjects> {
+        self.banks.get(&bank_id)
     }
 
     /// 创建一个新的 emitter
@@ -860,5 +866,24 @@ mod tests {
 
         assert_eq!(result, RuntimeRequestResult::Stopped { instance_id });
         assert_eq!(runtime.active_plan(instance_id), None);
+    }
+
+    #[test]
+    fn load_bank_keeps_only_compiled_objects_in_runtime_state() {
+        let event_id = EventId::new();
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+        let bank_id = bank.id;
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, Vec::new())
+            .expect("bank should load");
+
+        let objects = runtime
+            .loaded_bank_objects(bank_id)
+            .expect("loaded bank objects should exist");
+
+        assert_eq!(objects.events, vec![event_id]);
     }
 }
