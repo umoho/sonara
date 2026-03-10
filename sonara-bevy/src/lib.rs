@@ -9,10 +9,39 @@ use sonara_runtime::{
 #[derive(Debug, Default)]
 pub struct SonaraPlugin;
 
+/// Bevy 侧积累的一条音频请求
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioRequest {
+    Play {
+        event_id: EventId,
+    },
+    PlayOnEmitter {
+        emitter_id: EmitterId,
+        event_id: EventId,
+    },
+    SetGlobalParam {
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    },
+    SetEmitterParam {
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    },
+}
+
+/// 一次请求执行后的结果
+#[derive(Debug, Clone, PartialEq)]
+pub enum AudioRequestResult {
+    Played { instance_id: EventInstanceId },
+    ParameterSet,
+}
+
 /// Bevy 侧的全局音频入口
 #[derive(Debug, Default)]
 pub struct SonaraAudio {
     runtime: SonaraRuntime,
+    pending_requests: Vec<AudioRequest>,
 }
 
 impl SonaraAudio {
@@ -20,6 +49,7 @@ impl SonaraAudio {
     pub fn new() -> Self {
         Self {
             runtime: SonaraRuntime::new(),
+            pending_requests: Vec::new(),
         }
     }
 
@@ -33,6 +63,11 @@ impl SonaraAudio {
     /// 播放一个未绑定实体的事件
     pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
         self.runtime.play(event_id)
+    }
+
+    /// 排队一个未绑定 emitter 的播放请求
+    pub fn queue_play(&mut self, event_id: EventId) {
+        self.pending_requests.push(AudioRequest::Play { event_id });
     }
 
     /// 创建一个 emitter
@@ -71,6 +106,14 @@ impl SonaraAudio {
         self.runtime.play_on(emitter_id, event_id)
     }
 
+    /// 排队一个面向指定 emitter 的播放请求
+    pub fn queue_play_on(&mut self, emitter_id: EmitterId, event_id: EventId) {
+        self.pending_requests.push(AudioRequest::PlayOnEmitter {
+            emitter_id,
+            event_id,
+        });
+    }
+
     /// 通过 AudioEmitter 组件播放事件
     pub fn play_from_emitter(
         &mut self,
@@ -79,6 +122,12 @@ impl SonaraAudio {
     ) -> Result<EventInstanceId, RuntimeError> {
         let emitter_id = self.ensure_emitter(emitter);
         self.runtime.play_on(emitter_id, event_id)
+    }
+
+    /// 通过 AudioEmitter 组件排队播放请求
+    pub fn queue_play_from_emitter(&mut self, emitter: &mut AudioEmitter, event_id: EventId) {
+        let emitter_id = self.ensure_emitter(emitter);
+        self.queue_play_on(emitter_id, event_id);
     }
 
     /// 设置一个全局参数
@@ -90,6 +139,14 @@ impl SonaraAudio {
         self.runtime.set_global_param(parameter_id, value)
     }
 
+    /// 排队一个全局参数更新请求
+    pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
+        self.pending_requests.push(AudioRequest::SetGlobalParam {
+            parameter_id,
+            value,
+        });
+    }
+
     /// 设置 emitter 参数
     pub fn set_emitter_param(
         &mut self,
@@ -99,6 +156,20 @@ impl SonaraAudio {
     ) -> Result<(), RuntimeError> {
         self.runtime
             .set_emitter_param(emitter_id, parameter_id, value)
+    }
+
+    /// 排队一个 emitter 参数更新请求
+    pub fn queue_set_emitter_param(
+        &mut self,
+        emitter_id: EmitterId,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) {
+        self.pending_requests.push(AudioRequest::SetEmitterParam {
+            emitter_id,
+            parameter_id,
+            value,
+        });
     }
 
     /// 通过 AudioEmitter 组件设置 emitter 参数
@@ -113,9 +184,64 @@ impl SonaraAudio {
             .set_emitter_param(emitter_id, parameter_id, value)
     }
 
+    /// 通过 AudioEmitter 组件排队 emitter 参数更新
+    pub fn queue_set_emitter_param_on(
+        &mut self,
+        emitter: &mut AudioEmitter,
+        parameter_id: ParameterId,
+        value: ParameterValue,
+    ) {
+        let emitter_id = self.ensure_emitter(emitter);
+        self.queue_set_emitter_param(emitter_id, parameter_id, value);
+    }
+
     /// 读取一个事件实例当前解析出的播放计划
     pub fn active_plan(&self, instance_id: EventInstanceId) -> Option<&PlaybackPlan> {
         self.runtime.active_plan(instance_id)
+    }
+
+    /// 取出当前所有待处理请求
+    pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
+        self.pending_requests.drain(..).collect()
+    }
+
+    /// 依次执行所有待处理请求
+    pub fn apply_requests(&mut self) -> Result<Vec<AudioRequestResult>, RuntimeError> {
+        let requests = self.drain_requests();
+        let mut results = Vec::with_capacity(requests.len());
+
+        for request in requests {
+            let result = match request {
+                AudioRequest::Play { event_id } => AudioRequestResult::Played {
+                    instance_id: self.runtime.play(event_id)?,
+                },
+                AudioRequest::PlayOnEmitter {
+                    emitter_id,
+                    event_id,
+                } => AudioRequestResult::Played {
+                    instance_id: self.runtime.play_on(emitter_id, event_id)?,
+                },
+                AudioRequest::SetGlobalParam {
+                    parameter_id,
+                    value,
+                } => {
+                    self.runtime.set_global_param(parameter_id, value)?;
+                    AudioRequestResult::ParameterSet
+                }
+                AudioRequest::SetEmitterParam {
+                    emitter_id,
+                    parameter_id,
+                    value,
+                } => {
+                    self.runtime
+                        .set_emitter_param(emitter_id, parameter_id, value)?;
+                    AudioRequestResult::ParameterSet
+                }
+            };
+            results.push(result);
+        }
+
+        Ok(results)
     }
 
     /// 停止一个事件实例
@@ -243,6 +369,40 @@ mod tests {
             .expect("play should succeed");
         let plan = audio.active_plan(instance_id).expect("plan should exist");
 
+        assert_eq!(plan.emitter_id, emitter.id);
+        assert_eq!(plan.asset_ids, vec![asset_id]);
+    }
+
+    #[test]
+    fn queued_requests_are_applied_in_order() {
+        let surface_id = ParameterId::new();
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.events.push(event_id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let mut emitter = AudioEmitter::default();
+        audio.queue_set_emitter_param_on(
+            &mut emitter,
+            surface_id,
+            ParameterValue::Enum("stone".into()),
+        );
+        audio.queue_play_from_emitter(&mut emitter, event_id);
+
+        let results = audio.apply_requests().expect("requests should apply");
+        let instance_id = match results.last() {
+            Some(AudioRequestResult::Played { instance_id }) => *instance_id,
+            other => panic!("expected final played result, got {other:?}"),
+        };
+        let plan = audio.active_plan(instance_id).expect("plan should exist");
+
+        assert_eq!(results.len(), 2);
         assert_eq!(plan.emitter_id, emitter.id);
         assert_eq!(plan.asset_ids, vec![asset_id]);
     }
