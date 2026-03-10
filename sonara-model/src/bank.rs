@@ -41,15 +41,31 @@ pub struct BankAsset {
     pub streaming: StreamingMode,
 }
 
+/// compiled bank 中的媒体清单。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BankManifest {
+    pub assets: Vec<BankAsset>,
+    pub resident_media: Vec<Uuid>,
+    pub streaming_media: Vec<Uuid>,
+}
+
+impl Default for BankManifest {
+    fn default() -> Self {
+        Self {
+            assets: Vec::new(),
+            resident_media: Vec::new(),
+            streaming_media: Vec::new(),
+        }
+    }
+}
+
 /// 运行时的 bank 加载单元
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bank {
     pub id: BankId,
     pub name: SmolStr,
     pub events: Vec<EventId>,
-    pub assets: Vec<BankAsset>,
-    pub resident_media: Vec<Uuid>,
-    pub streaming_media: Vec<Uuid>,
+    pub manifest: BankManifest,
 }
 
 impl Bank {
@@ -59,9 +75,7 @@ impl Bank {
             id: BankId::new(),
             name: name.into(),
             events: Vec::new(),
-            assets: Vec::new(),
-            resident_media: Vec::new(),
-            streaming_media: Vec::new(),
+            manifest: BankManifest::default(),
         }
     }
 }

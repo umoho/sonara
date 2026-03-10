@@ -113,11 +113,12 @@ pub fn build_bank(
                 .ok_or(BuildError::MissingAudioAsset)?;
 
             if !bank
+                .manifest
                 .assets
                 .iter()
                 .any(|bank_asset| bank_asset.id == asset_id)
             {
-                bank.assets.push(BankAsset {
+                bank.manifest.assets.push(BankAsset {
                     id: asset.id,
                     name: asset.name.clone(),
                     source_path: asset.source_path.clone(),
@@ -137,11 +138,11 @@ pub fn build_bank(
         }
     }
 
-    bank.resident_media = resident_media.into_iter().collect();
-    bank.streaming_media = streaming_media.into_iter().collect();
-    bank.assets.sort_by(|a, b| a.id.cmp(&b.id));
-    bank.resident_media.sort_unstable();
-    bank.streaming_media.sort_unstable();
+    bank.manifest.resident_media = resident_media.into_iter().collect();
+    bank.manifest.streaming_media = streaming_media.into_iter().collect();
+    bank.manifest.assets.sort_by(|a, b| a.id.cmp(&b.id));
+    bank.manifest.resident_media.sort_unstable();
+    bank.manifest.streaming_media.sort_unstable();
 
     Ok(bank)
 }
@@ -319,9 +320,9 @@ mod tests {
 
         assert_eq!(bank.name.as_str(), "core");
         assert_eq!(bank.events.len(), 1);
-        assert_eq!(bank.assets.len(), 2);
-        assert_eq!(bank.resident_media, vec![resident_asset.id]);
-        assert_eq!(bank.streaming_media, vec![streaming_asset.id]);
+        assert_eq!(bank.manifest.assets.len(), 2);
+        assert_eq!(bank.manifest.resident_media, vec![resident_asset.id]);
+        assert_eq!(bank.manifest.streaming_media, vec![streaming_asset.id]);
     }
 
     #[test]
@@ -339,7 +340,11 @@ mod tests {
         );
 
         let bank = build_bank("core", &[event], &[asset.clone()]).expect("bank should build");
-        let manifest_asset = bank.assets.first().expect("manifest asset should exist");
+        let manifest_asset = bank
+            .manifest
+            .assets
+            .first()
+            .expect("manifest asset should exist");
 
         assert_eq!(manifest_asset.id, asset.id);
         assert_eq!(manifest_asset.import_settings, asset.import_settings);
@@ -399,8 +404,8 @@ mod tests {
 
         assert_eq!(bank.id, definition.id);
         assert_eq!(bank.events, vec![selected_event.id]);
-        assert_eq!(bank.assets.len(), 1);
-        assert_eq!(bank.assets[0].id, selected_asset.id);
+        assert_eq!(bank.manifest.assets.len(), 1);
+        assert_eq!(bank.manifest.assets[0].id, selected_asset.id);
     }
 
     #[test]

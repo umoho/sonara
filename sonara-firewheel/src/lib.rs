@@ -118,7 +118,7 @@ impl FirewheelBackend {
         events: Vec<Event>,
     ) -> Result<(), FirewheelBackendError> {
         // 先注册 bank 引用到的资源, 让后续 play 路径只消费已准备好的 SampleResource.
-        for asset in &bank.assets {
+        for asset in &bank.manifest.assets {
             let audio_asset = AudioAsset {
                 id: asset.id,
                 name: asset.name.clone(),
