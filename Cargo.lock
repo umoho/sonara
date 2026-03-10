@@ -278,8 +278,11 @@ dependencies = [
 name = "sonara-build"
 version = "0.1.0"
 dependencies = [
+ "camino",
+ "smol_str",
  "sonara-model",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -311,8 +314,10 @@ dependencies = [
 name = "sonara-runtime"
 version = "0.1.0"
 dependencies = [
+ "smol_str",
  "sonara-model",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]

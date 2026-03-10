@@ -6,4 +6,6 @@ version.workspace = true
 
 [dependencies]
 sonara-model = { path = "../sonara-model" }
+smol_str.workspace = true
 thiserror.workspace = true
+uuid.workspace = true

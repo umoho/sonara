@@ -1,6 +1,6 @@
 //! Bevy 集成层骨架
 
-use sonara_model::{BankId, EventId, ParameterId, ParameterValue, SnapshotId};
+use sonara_model::{Bank, BankId, Event, EventId, ParameterId, ParameterValue, SnapshotId};
 use sonara_runtime::{EventInstanceId, Fade, RuntimeError, SnapshotInstanceId, SonaraRuntime};
 
 /// Sonara 的 Bevy 插件入口
@@ -24,12 +24,12 @@ impl SonaraAudio {
     /// 加载一个 bank
     ///
     /// 这里先保留最小骨架, 后续会改成真正的加载流程
-    pub fn load_bank(&mut self, bank_id: BankId) -> Result<BankId, RuntimeError> {
-        self.runtime.load_bank(bank_id)
+    pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
+        self.runtime.load_bank(bank, events)
     }
 
     /// 播放一个未绑定实体的事件
-    pub fn play(&self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
+    pub fn play(&mut self, event_id: EventId) -> Result<EventInstanceId, RuntimeError> {
         self.runtime.play(event_id)
     }
 
