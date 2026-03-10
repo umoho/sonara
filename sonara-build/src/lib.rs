@@ -53,6 +53,21 @@ pub enum CompiledBankFileError {
 ///
 /// 它把 runtime/backend 加载一个 compiled bank 所需的高层对象定义放在一起，
 /// 便于后续从文件读取后直接进入加载流程。
+///
+/// 当前 v0 阶段, 这个类型应被理解为:
+///
+/// - 当前 runtime 的最小加载载荷
+/// - 当前 backend 的最小资源准备载荷
+/// - 而不是最终固定不变的 bank 文件标准
+///
+/// 其中字段边界是:
+///
+/// - `bank.objects`
+///   - 供 runtime 识别这个 bank 里有哪些高层对象
+/// - `bank.manifest`
+///   - 供 backend 准备媒体资源
+/// - `events / buses / snapshots`
+///   - 供 runtime 加载对象定义本体
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBankPackage {
     pub bank: Bank,
@@ -62,6 +77,26 @@ pub struct CompiledBankPackage {
 }
 
 impl CompiledBankPackage {
+    /// 读取 runtime 当前真正会消费的 bank 元数据。
+    pub fn bank(&self) -> &Bank {
+        &self.bank
+    }
+
+    /// 读取 runtime 会加载的事件定义。
+    pub fn events(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// 读取 runtime 会加载的 bus 定义。
+    pub fn buses(&self) -> &[Bus] {
+        &self.buses
+    }
+
+    /// 读取 runtime 会加载的 snapshot 定义。
+    pub fn snapshots(&self) -> &[Snapshot] {
+        &self.snapshots
+    }
+
     /// 从 JSON 字符串读取 compiled bank 载荷。
     pub fn from_json_str(contents: &str) -> Result<Self, CompiledBankFileError> {
         Ok(serde_json::from_str(contents)?)
@@ -688,6 +723,104 @@ mod tests {
             .expect("compiled package should deserialize from JSON");
 
         assert_eq!(decoded.bank.name, "core");
+    }
+
+    #[test]
+    fn compiled_bank_package_keeps_object_lists_in_sync_with_loaded_definitions() {
+        let asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let sampler_id = NodeId::new();
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: asset.id,
+            })],
+            sampler_id,
+        );
+        let bus = sonara_model::Bus::new("sfx");
+        let snapshot = sonara_model::Snapshot {
+            id: sonara_model::SnapshotId::new(),
+            name: "combat".into(),
+            fade_in_seconds: 0.2,
+            fade_out_seconds: 0.4,
+            targets: vec![sonara_model::SnapshotTarget {
+                bus_id: bus.id,
+                target_volume: 0.8,
+            }],
+        };
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.events.push(event.clone());
+        project.buses.push(bus.clone());
+        project.snapshots.push(snapshot.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(event.id);
+        definition.buses.push(bus.id);
+        definition.snapshots.push(snapshot.id);
+
+        let package =
+            compile_bank_definition(&definition, &project).expect("package should compile");
+
+        assert_eq!(package.bank().objects.events, vec![event.id]);
+        assert_eq!(package.bank().objects.buses, vec![bus.id]);
+        assert_eq!(package.bank().objects.snapshots, vec![snapshot.id]);
+        assert_eq!(
+            package
+                .events()
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            vec![event.id]
+        );
+        assert_eq!(
+            package.buses().iter().map(|bus| bus.id).collect::<Vec<_>>(),
+            vec![bus.id]
+        );
+        assert_eq!(
+            package
+                .snapshots()
+                .iter()
+                .map(|snapshot| snapshot.id)
+                .collect::<Vec<_>>(),
+            vec![snapshot.id]
+        );
+    }
+
+    #[test]
+    fn compiled_bank_package_manifest_only_contains_assets_referenced_by_loaded_events() {
+        let selected_asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let ignored_asset = make_asset("ui_click", StreamingMode::Resident);
+        let sampler_id = NodeId::new();
+        let event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: selected_asset.id,
+            })],
+            sampler_id,
+        );
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(selected_asset.clone());
+        project.assets.push(ignored_asset.clone());
+        project.events.push(event.clone());
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(event.id);
+
+        let package =
+            compile_bank_definition(&definition, &project).expect("package should compile");
+
+        assert_eq!(package.bank().manifest.assets.len(), 1);
+        assert_eq!(package.bank().manifest.assets[0].id, selected_asset.id);
+        assert!(
+            !package
+                .bank()
+                .manifest
+                .assets
+                .iter()
+                .any(|asset| asset.id == ignored_asset.id)
+        );
     }
 
     #[test]

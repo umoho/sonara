@@ -28,6 +28,21 @@ backend 负责：
 `runtime` 决定“该播什么”  
 `backend` 决定“怎么真的播出来”
 
+当前 v0 阶段还有一个中间层需要一起理解:
+
+- `CompiledBankPackage`
+
+它是 build 层导出的当前运行时加载载荷, 不是 editor 工程文件, 也不是最终固定标准。
+在当前实现里:
+
+- runtime 主要消费:
+  - `bank.objects`
+  - `events`
+  - `buses`
+  - `snapshots`
+- backend 主要消费:
+  - `bank.manifest`
+
 ## runtime 当前负责的事
 
 `sonara-runtime` 当前已经负责：
