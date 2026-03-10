@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use smol_str::SmolStr;
 use sonara_model::{
-    AudioAsset, Bank, BankAsset, Event, EventContentNode, NodeId, NodeRef, StreamingMode,
+    AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Event, EventContentNode,
+    EventId, NodeId, NodeRef, StreamingMode,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -26,6 +27,8 @@ pub enum BuildError {
     EmptyContainer,
     #[error("事件引用了不存在的音频资源")]
     MissingAudioAsset,
+    #[error("bank 定义引用了不存在的事件")]
+    MissingEventDefinition,
 }
 
 /// 对单个事件做最小语义校验
@@ -143,6 +146,30 @@ pub fn build_bank(
     Ok(bank)
 }
 
+/// 根据 authoring 项目里的 bank 定义构建一个 runtime bank。
+pub fn build_bank_from_definition(
+    definition: &BankDefinition,
+    project: &AuthoringProject,
+) -> Result<Bank, BuildError> {
+    let event_by_id: HashMap<EventId, &Event> = project
+        .events
+        .iter()
+        .map(|event| (event.id, event))
+        .collect();
+    let mut events = Vec::with_capacity(definition.events.len());
+
+    for event_id in &definition.events {
+        let event = event_by_id
+            .get(event_id)
+            .ok_or(BuildError::MissingEventDefinition)?;
+        events.push((*event).clone());
+    }
+
+    let mut bank = build_bank(definition.name.clone(), &events, &project.assets)?;
+    bank.id = definition.id;
+    Ok(bank)
+}
+
 /// 收集一个事件中所有被 `Sampler` 引用的资源 ID
 pub fn collect_event_asset_ids(event: &Event) -> HashSet<Uuid> {
     event
@@ -188,8 +215,8 @@ fn validate_ref_set(
 mod tests {
     use camino::Utf8PathBuf;
     use sonara_model::{
-        EventContentRoot, EventId, EventKind, ParameterId, SamplerNode, SequenceNode, SpatialMode,
-        SwitchCase, SwitchNode,
+        AuthoringProject, EventContentRoot, EventId, EventKind, ParameterId, SamplerNode,
+        SequenceNode, SpatialMode, SwitchCase, SwitchNode,
     };
 
     use super::*;
@@ -333,6 +360,58 @@ mod tests {
         assert!(matches!(
             build_bank("core", &[event], &[]),
             Err(BuildError::MissingAudioAsset)
+        ));
+    }
+
+    #[test]
+    fn build_bank_from_definition_uses_project_event_selection() {
+        let selected_asset = make_asset("footstep_wood_01", StreamingMode::Resident);
+        let ignored_asset = make_asset("ui_click", StreamingMode::Resident);
+        let selected_sampler_id = NodeId::new();
+        let ignored_sampler_id = NodeId::new();
+
+        let selected_event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: selected_sampler_id,
+                asset_id: selected_asset.id,
+            })],
+            selected_sampler_id,
+        );
+        let ignored_event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: ignored_sampler_id,
+                asset_id: ignored_asset.id,
+            })],
+            ignored_sampler_id,
+        );
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(selected_asset.clone());
+        project.assets.push(ignored_asset);
+        project.events.push(selected_event.clone());
+        project.events.push(ignored_event);
+
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(selected_event.id);
+
+        let bank = build_bank_from_definition(&definition, &project)
+            .expect("bank should build from project");
+
+        assert_eq!(bank.id, definition.id);
+        assert_eq!(bank.events, vec![selected_event.id]);
+        assert_eq!(bank.assets.len(), 1);
+        assert_eq!(bank.assets[0].id, selected_asset.id);
+    }
+
+    #[test]
+    fn build_bank_from_definition_rejects_missing_project_event() {
+        let project = AuthoringProject::new("demo");
+        let mut definition = sonara_model::BankDefinition::new("core");
+        definition.events.push(EventId::new());
+
+        assert!(matches!(
+            build_bank_from_definition(&definition, &project),
+            Err(BuildError::MissingEventDefinition)
         ));
     }
 }

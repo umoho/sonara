@@ -9,10 +9,11 @@ pub mod bus;
 pub mod event;
 pub mod ids;
 pub mod parameter;
+pub mod project;
 pub mod snapshot;
 
 pub use asset::{AnalysisMetadata, AudioAsset, ImportSettings, LoopRegion, StreamingMode};
-pub use bank::{Bank, BankAsset};
+pub use bank::{Bank, BankAsset, BankDefinition};
 pub use bus::Bus;
 pub use event::{
     Event, EventContentNode, EventContentRoot, EventKind, LeafNode, LoopNode, NodeId, NodeRef,
@@ -23,4 +24,5 @@ pub use parameter::{
     BoolParameter, EnumParameter, FloatParameter, Parameter, ParameterDefaultValue, ParameterKind,
     ParameterScope, ParameterValue,
 };
+pub use project::AuthoringProject;
 pub use snapshot::{Snapshot, SnapshotTarget};
