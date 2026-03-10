@@ -13,7 +13,8 @@ use firewheel::{
     sample_resource::{InterleavedResourceF32, SampleResource},
 };
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan};
-use sonara_model::EventId;
+use firewheel_symphonium::load_audio_file;
+use sonara_model::{AudioAsset, EventId};
 use sonara_runtime::{EmitterId, EventInstanceId, PlaybackPlan, RuntimeError, SonaraRuntime};
 use thiserror::Error;
 use uuid::Uuid;
@@ -29,6 +30,8 @@ pub enum FirewheelBackendError {
     InvalidChannelCount(Uuid),
     #[error("资源 `{0}` 的采样率必须大于 0")]
     InvalidSampleRate(Uuid),
+    #[error("资源 `{0}` 解码失败: {1}")]
+    DecodeAsset(Uuid, String),
     #[error("Firewheel 启动音频流失败: {0}")]
     StartStream(String),
     #[error("Firewheel 更新失败: {0}")]
@@ -116,6 +119,28 @@ impl FirewheelBackend {
         resource: ArcGc<dyn SampleResource>,
     ) {
         self.sample_resources.insert(asset_id, resource);
+    }
+
+    /// 从磁盘上的音频文件加载一个 AudioAsset
+    pub fn register_audio_asset(
+        &mut self,
+        asset: &AudioAsset,
+    ) -> Result<(), FirewheelBackendError> {
+        let mut loader = symphonium::SymphoniumLoader::new();
+        let target_sample_rate = asset
+            .import_settings
+            .target_sample_rate
+            .and_then(NonZeroU32::new);
+        let decoded = load_audio_file(
+            &mut loader,
+            asset.source_path.as_std_path(),
+            target_sample_rate,
+            symphonium::ResampleQuality::default(),
+        )
+        .map_err(|error| FirewheelBackendError::DecodeAsset(asset.id, error.to_string()))?;
+
+        self.register_sample_resource(asset.id, decoded.into());
+        Ok(())
     }
 
     /// 播放一个未绑定实体的事件

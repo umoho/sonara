@@ -7,7 +7,9 @@ version.workspace = true
 [dependencies]
 firewheel.workspace = true
 firewheel-pool.workspace = true
+firewheel-symphonium.workspace = true
 sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
+symphonium.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

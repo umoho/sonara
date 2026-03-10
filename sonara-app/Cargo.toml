@@ -5,6 +5,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+camino.workspace = true
+hound.workspace = true
 sonara-editor = { path = "../sonara-editor" }
 sonara-firewheel = { path = "../sonara-firewheel" }
 sonara-model = { path = "../sonara-model" }
