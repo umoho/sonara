@@ -2612,6 +2612,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-chinese-font"
+version = "0.2.0"
+source = "git+https://github.com/umoho/egui-chinese-font?rev=61669dbb647c05b5bdf2ca39d9205ae1e7772347#61669dbb647c05b5bdf2ca39d9205ae1e7772347"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5700,6 +5708,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "egui-chinese-font",
  "sonara-build",
  "sonara-model",
 ]

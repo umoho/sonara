@@ -8,6 +8,7 @@ use std::{
 };
 
 use eframe::egui::{self, Align, Color32, Layout, RichText, TextEdit};
+use egui_chinese_font::setup_chinese_fonts;
 use sonara_build::{ProjectExportBankError, compile_project_bank_to_file};
 use sonara_model::{AuthoringProject, BankDefinition, Event, ProjectFileError};
 
@@ -27,7 +28,19 @@ pub fn run() -> eframe::Result<()> {
     eframe::run_native(
         "Sonara Editor",
         options,
-        Box::new(|_cc| Ok(Box::new(EditorApp::new()))),
+        Box::new(|cc| {
+            let mut app = EditorApp::new();
+
+            if let Err(error) = setup_chinese_fonts(&cc.egui_ctx) {
+                app.state.status_message = format!("中文字体加载失败: {error}");
+                app.state
+                    .push_error_log(format!("中文字体加载失败, error={error}"));
+            } else {
+                app.state.push_info_log("中文字体加载成功".to_owned());
+            }
+
+            Ok(Box::new(app))
+        }),
     )
 }
 
