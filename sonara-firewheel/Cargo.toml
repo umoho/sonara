@@ -8,6 +8,7 @@ version.workspace = true
 firewheel.workspace = true
 firewheel-pool.workspace = true
 firewheel-symphonium.workspace = true
+sonara-build = { path = "../sonara-build" }
 sonara-model = { path = "../sonara-model" }
 sonara-runtime = { path = "../sonara-runtime" }
 symphonium.workspace = true

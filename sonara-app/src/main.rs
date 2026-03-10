@@ -1,12 +1,12 @@
 use std::{thread, time::Duration};
 
 use camino::Utf8PathBuf;
+use sonara_build::build_bank;
 use sonara_firewheel::FirewheelBackend;
 use sonara_model::{
-    AudioAsset, Bank, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId,
-    NodeRef, ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
+    AudioAsset, Event, EventContentNode, EventContentRoot, EventId, EventKind, NodeId, NodeRef,
+    ParameterId, ParameterValue, SamplerNode, SpatialMode, SwitchCase, SwitchNode,
 };
-use sonara_runtime::SonaraRuntime;
 use uuid::Uuid;
 
 fn main() {
@@ -64,21 +64,22 @@ fn main() {
         steal_policy: None,
     };
 
-    let mut bank = Bank::new("core");
-    bank.events.push(event_id);
+    let bank = build_bank(
+        "core",
+        &[event.clone()],
+        &[wood_audio_asset.clone(), stone_audio_asset.clone()],
+    )
+    .expect("bank should build");
 
-    let mut runtime = SonaraRuntime::new();
-    runtime
-        .load_bank(bank, vec![event])
-        .expect("bank should load");
-
-    let mut backend = FirewheelBackend::new(runtime).expect("Firewheel backend should start");
+    let mut backend =
+        FirewheelBackend::new(Default::default()).expect("Firewheel backend should start");
     backend
-        .register_audio_asset(&wood_audio_asset)
-        .expect("wood asset should decode and register");
-    backend
-        .register_audio_asset(&stone_audio_asset)
-        .expect("stone asset should decode and register");
+        .load_bank(
+            bank,
+            vec![event],
+            vec![wood_audio_asset.clone(), stone_audio_asset.clone()],
+        )
+        .expect("bank assets should decode and load");
 
     let emitter_id = backend.runtime_mut().create_emitter();
     backend

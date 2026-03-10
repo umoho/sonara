@@ -14,7 +14,8 @@ use firewheel::{
 };
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan};
 use firewheel_symphonium::load_audio_file;
-use sonara_model::{AudioAsset, EventId};
+use sonara_build::BuildError;
+use sonara_model::{AudioAsset, Bank, Event, EventId};
 use sonara_runtime::{EmitterId, EventInstanceId, PlaybackPlan, RuntimeError, SonaraRuntime};
 use thiserror::Error;
 use uuid::Uuid;
@@ -23,7 +24,11 @@ use uuid::Uuid;
 #[derive(Debug, Error)]
 pub enum FirewheelBackendError {
     #[error(transparent)]
+    Build(#[from] BuildError),
+    #[error(transparent)]
     Runtime(#[from] RuntimeError),
+    #[error("bank `{0:?}` 引用了未提供定义的资源 `{1}`")]
+    MissingAssetDefinition(sonara_model::BankId, Uuid),
     #[error("资源 `{0}` 没有注册到 Firewheel 后端")]
     AssetNotRegistered(Uuid),
     #[error("资源 `{0}` 的声道数必须大于 0")]
@@ -85,6 +90,32 @@ impl FirewheelBackend {
     /// 获取后端持有的运行时可变引用
     pub fn runtime_mut(&mut self) -> &mut SonaraRuntime {
         &mut self.runtime
+    }
+
+    /// 加载 bank, 事件和它依赖的音频资源
+    pub fn load_bank(
+        &mut self,
+        bank: Bank,
+        events: Vec<Event>,
+        assets: Vec<AudioAsset>,
+    ) -> Result<(), FirewheelBackendError> {
+        let asset_by_id: HashMap<Uuid, &AudioAsset> =
+            assets.iter().map(|asset| (asset.id, asset)).collect();
+
+        // 先注册 bank 引用到的资源, 让后续 play 路径只消费已准备好的 SampleResource.
+        for asset_id in bank
+            .resident_media
+            .iter()
+            .chain(bank.streaming_media.iter())
+        {
+            let asset = asset_by_id.get(asset_id).copied().ok_or(
+                FirewheelBackendError::MissingAssetDefinition(bank.id, *asset_id),
+            )?;
+            self.register_audio_asset(asset)?;
+        }
+
+        self.runtime.load_bank(bank, events)?;
+        Ok(())
     }
 
     /// 注册一段交错布局的 `f32` PCM 数据

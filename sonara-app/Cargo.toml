@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 camino.workspace = true
+sonara-build = { path = "../sonara-build" }
 sonara-editor = { path = "../sonara-editor" }
 sonara-firewheel = { path = "../sonara-firewheel" }
 sonara-model = { path = "../sonara-model" }

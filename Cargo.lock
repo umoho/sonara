@@ -1438,6 +1438,7 @@ name = "sonara-app"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "sonara-build",
  "sonara-editor",
  "sonara-firewheel",
  "sonara-model",
@@ -1479,6 +1480,7 @@ dependencies = [
  "firewheel",
  "firewheel-pool",
  "firewheel-symphonium",
+ "sonara-build",
  "sonara-model",
  "sonara-runtime",
  "symphonium",
