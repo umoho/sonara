@@ -13,7 +13,10 @@ use std::{
 use eframe::egui::{self, Align, Color32, Layout, RichText, TextEdit};
 use egui_chinese_font::setup_chinese_fonts;
 use i18n::{EditorLocale, TextKey, TextTemplate, template, text};
-use sonara_build::{ProjectExportBankError, collect_event_asset_ids, compile_project_bank_to_file};
+use sonara_build::{
+    BuildError, ProjectExportBankError, collect_event_asset_ids, compile_bank_definition,
+    compile_project_bank_to_file,
+};
 use sonara_model::{
     AuthoringProject, BankDefinition, Event, EventKind, ProjectFileError, SpatialMode,
 };
@@ -96,6 +99,7 @@ pub struct EditorState {
     pub export_path: String,
     pub loaded_project: Option<AuthoringProject>,
     pub selected_bank_name: Option<String>,
+    pub validation_report: ValidationReport,
     pub last_export: Option<ExportReport>,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
@@ -256,11 +260,22 @@ impl EditorState {
                     .hint_text(output_path_hint),
             );
 
+            ui.add_space(12.0);
+            self.draw_validation_report(ui);
+
             ui.add_space(8.0);
             let mut should_export = false;
             let mut should_reset_export_path = false;
+            let can_export =
+                self.validation_report.can_export() && !self.export_path.trim().is_empty();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                if ui.button(self.tx(TextKey::ExportCompiledBank)).clicked() {
+                if ui
+                    .add_enabled(
+                        can_export,
+                        egui::Button::new(self.tx(TextKey::ExportCompiledBank)),
+                    )
+                    .clicked()
+                {
                     should_export = true;
                 }
 
@@ -474,6 +489,7 @@ impl EditorState {
             Ok(project) => {
                 self.loaded_project = Some(project);
                 self.last_export = None;
+                self.refresh_validation();
                 self.status_message = self.tr(TextTemplate::ProjectLoaded {
                     path: self.project_path.clone(),
                 });
@@ -497,6 +513,7 @@ impl EditorState {
             Err(error) => {
                 self.loaded_project = None;
                 self.selected_bank_name = None;
+                self.validation_report = ValidationReport::default();
                 self.status_message = self.tr(TextTemplate::LoadFailed {
                     error: render_project_error(&error),
                 });
@@ -512,6 +529,7 @@ impl EditorState {
     pub fn select_bank(&mut self, bank_name: &str) {
         self.selected_bank_name = Some(bank_name.to_owned());
         self.export_path = self.suggest_export_path(bank_name);
+        self.refresh_validation();
         self.status_message = self.tr(TextTemplate::SelectBank {
             bank_name: bank_name.to_owned(),
         });
@@ -608,6 +626,81 @@ impl EditorState {
         self.logs.push(LogEntry::new(LogLevel::Error, message));
     }
 
+    fn refresh_validation(&mut self) {
+        let Some(project) = &self.loaded_project else {
+            self.validation_report = ValidationReport::default();
+            return;
+        };
+
+        let Some(bank) = self.selected_bank(project) else {
+            self.validation_report = ValidationReport::default();
+            return;
+        };
+
+        match compile_bank_definition(bank, project) {
+            Ok(package) => {
+                self.validation_report = ValidationReport::ready(
+                    package.bank.manifest.assets.len(),
+                    package.bank.manifest.resident_media.len(),
+                    package.bank.manifest.streaming_media.len(),
+                );
+            }
+            Err(error) => {
+                self.validation_report = ValidationReport::blocked(vec![render_build_error(error)]);
+            }
+        }
+    }
+
+    fn draw_validation_report(&self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(RichText::new(self.tx(TextKey::Validation)).strong());
+
+            let status_label = if self.validation_report.can_export() {
+                self.tx(TextKey::ValidationReady)
+            } else {
+                self.tx(TextKey::ValidationBlocked)
+            };
+            let status_color = if self.validation_report.can_export() {
+                Color32::LIGHT_GREEN
+            } else {
+                Color32::LIGHT_RED
+            };
+
+            ui.label(RichText::new(status_label).color(status_color));
+
+            if self.validation_report.issues.is_empty() {
+                ui.label(self.tx(TextKey::NoValidationIssues));
+            } else {
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::ValidationIssueCount),
+                    self.validation_report.issues.len()
+                ));
+                for issue in &self.validation_report.issues {
+                    ui.colored_label(Color32::LIGHT_RED, issue);
+                }
+            }
+
+            if let Some(asset_count) = self.validation_report.asset_count {
+                ui.label(format!("{}: {}", self.tx(TextKey::AssetCount), asset_count));
+            }
+            if let Some(resident_media_count) = self.validation_report.resident_media_count {
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::ResidentMediaCount),
+                    resident_media_count
+                ));
+            }
+            if let Some(streaming_media_count) = self.validation_report.streaming_media_count {
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::StreamingMediaCount),
+                    streaming_media_count
+                ));
+            }
+        });
+    }
+
     fn draw_export_report(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.label(RichText::new(self.tx(TextKey::LastExport)).strong());
@@ -699,6 +792,20 @@ fn render_export_error(error: &ProjectExportBankError) -> String {
     error.to_string()
 }
 
+fn render_build_error(error: BuildError) -> String {
+    match error {
+        BuildError::EmptyEventTree => "事件内容树为空".to_owned(),
+        BuildError::MissingRootNode => "事件根节点不存在".to_owned(),
+        BuildError::DuplicateNodeId => "事件内容树存在重复节点 ID".to_owned(),
+        BuildError::MissingChildNode => "节点引用了不存在的子节点".to_owned(),
+        BuildError::EmptyContainer => "容器节点必须至少包含一个子节点".to_owned(),
+        BuildError::MissingAudioAsset => "事件引用了不存在的音频资源".to_owned(),
+        BuildError::MissingEventDefinition => "音频包引用了不存在的事件".to_owned(),
+        BuildError::MissingBusDefinition => "音频包引用了不存在的总线".to_owned(),
+        BuildError::MissingSnapshotDefinition => "音频包引用了不存在的快照".to_owned(),
+    }
+}
+
 fn format_event_kind(kind: EventKind) -> &'static str {
     match kind {
         EventKind::OneShot => "OneShot",
@@ -743,6 +850,43 @@ pub struct ExportReport {
     pub streaming_media_count: usize,
     pub file_size_bytes: Option<u64>,
     pub error_message: Option<String>,
+}
+
+/// 当前选中音频包的导出前校验结果。
+#[derive(Debug, Clone, Default)]
+pub struct ValidationReport {
+    pub issues: Vec<String>,
+    pub asset_count: Option<usize>,
+    pub resident_media_count: Option<usize>,
+    pub streaming_media_count: Option<usize>,
+}
+
+impl ValidationReport {
+    fn ready(
+        asset_count: usize,
+        resident_media_count: usize,
+        streaming_media_count: usize,
+    ) -> Self {
+        Self {
+            issues: Vec::new(),
+            asset_count: Some(asset_count),
+            resident_media_count: Some(resident_media_count),
+            streaming_media_count: Some(streaming_media_count),
+        }
+    }
+
+    fn blocked(issues: Vec<String>) -> Self {
+        Self {
+            issues,
+            asset_count: None,
+            resident_media_count: None,
+            streaming_media_count: None,
+        }
+    }
+
+    fn can_export(&self) -> bool {
+        self.issues.is_empty()
+    }
 }
 
 impl ExportReport {
