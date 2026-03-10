@@ -85,6 +85,9 @@ cargo run --example minimal_bevy -p sonara-bevy
 
 - 设计和分层说明见 [ARCHITECTURE.md](./ARCHITECTURE.md)
 - 产品目标和范围见 [PRD.md](./PRD.md)
+- 项目概览见 [docs/overview.md](./docs/overview.md)
+- authoring 与 bank 概念见 [docs/concepts/authoring-and-bank.md](./docs/concepts/authoring-and-bank.md)
+- runtime 与 backend 边界见 [docs/architecture/runtime-and-backend.md](./docs/architecture/runtime-and-backend.md)
 
 ## 当前阶段判断
 
