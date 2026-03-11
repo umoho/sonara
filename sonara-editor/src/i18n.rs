@@ -40,11 +40,13 @@ pub enum TextKey {
     BankList,
     QuickActions,
     CreateObjects,
+    NewAssetPath,
     NewEventName,
     NewBusName,
     NewSnapshotName,
     NewParameterName,
     NewParameterVariants,
+    CreateAsset,
     CreateEvent,
     CreateBus,
     CreateSnapshot,
@@ -122,9 +124,12 @@ pub enum TextKey {
     ConvertToSingleAsset,
     ConvertToStateSwitch,
     ProjectParameters,
+    ProjectAssets,
     NoParameters,
+    NoAssetsInProject,
     NoEnumParameters,
     EnumParameterHint,
+    AssetImportHint,
     UnsupportedEventContent,
     UnsupportedParameterType,
     NoEvents,
@@ -231,6 +236,12 @@ pub enum TextTemplate {
     CreatedParameter {
         parameter_name: String,
     },
+    CreatedAsset {
+        asset_name: String,
+    },
+    CreateAssetFailed {
+        error: String,
+    },
 }
 
 /// 返回静态文案。
@@ -266,11 +277,13 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::BankList => "Bank列表",
         TextKey::QuickActions => "快捷操作",
         TextKey::CreateObjects => "创建对象",
+        TextKey::NewAssetPath => "新资源路径",
         TextKey::NewEventName => "新Event名称",
         TextKey::NewBusName => "新Bus名称",
         TextKey::NewSnapshotName => "新Snapshot名称",
         TextKey::NewParameterName => "新参数名称",
         TextKey::NewParameterVariants => "枚举值",
+        TextKey::CreateAsset => "导入Asset",
         TextKey::CreateEvent => "创建Event",
         TextKey::CreateBus => "创建Bus",
         TextKey::CreateSnapshot => "创建Snapshot",
@@ -347,10 +360,13 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::DefaultCase => "默认分支",
         TextKey::ConvertToSingleAsset => "转换为单资源",
         TextKey::ConvertToStateSwitch => "转换为按参数切换",
+        TextKey::ProjectAssets => "项目资源",
         TextKey::ProjectParameters => "项目参数",
+        TextKey::NoAssetsInProject => "无资源",
         TextKey::NoParameters => "无参数",
         TextKey::NoEnumParameters => "暂无可用的枚举参数",
         TextKey::EnumParameterHint => "枚举值使用半角逗号分隔",
+        TextKey::AssetImportHint => "输入音频文件路径后导入到项目资源列表",
         TextKey::UnsupportedEventContent => "当前事件树暂不支持在此编辑",
         TextKey::UnsupportedParameterType => "当前参数类型暂不支持在此编辑",
         TextKey::NoEvents => "无事件",
@@ -402,11 +418,13 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::BankList => "Bank List",
         TextKey::QuickActions => "Quick Actions",
         TextKey::CreateObjects => "Create Objects",
+        TextKey::NewAssetPath => "New Asset Path",
         TextKey::NewEventName => "New Event Name",
         TextKey::NewBusName => "New Bus Name",
         TextKey::NewSnapshotName => "New Snapshot Name",
         TextKey::NewParameterName => "New Parameter Name",
         TextKey::NewParameterVariants => "Variants",
+        TextKey::CreateAsset => "Import Asset",
         TextKey::CreateEvent => "Create Event",
         TextKey::CreateBus => "Create Bus",
         TextKey::CreateSnapshot => "Create Snapshot",
@@ -485,10 +503,13 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::DefaultCase => "Default Case",
         TextKey::ConvertToSingleAsset => "Convert to Single Asset",
         TextKey::ConvertToStateSwitch => "Convert to State Switch",
+        TextKey::ProjectAssets => "Project Assets",
         TextKey::ProjectParameters => "Project Parameters",
+        TextKey::NoAssetsInProject => "No assets.",
         TextKey::NoParameters => "No parameters.",
         TextKey::NoEnumParameters => "No enum parameters available.",
         TextKey::EnumParameterHint => "Separate enum variants with commas",
+        TextKey::AssetImportHint => "Enter an audio file path to register it as a project asset",
         TextKey::UnsupportedEventContent => {
             "This event tree shape is not editable in the current inspector."
         }
@@ -585,6 +606,8 @@ fn template_zh_cn(template: TextTemplate) -> String {
         TextTemplate::CreatedParameter { parameter_name } => {
             format!("已创建枚举参数 {parameter_name}")
         }
+        TextTemplate::CreatedAsset { asset_name } => format!("已导入资源 {asset_name}"),
+        TextTemplate::CreateAssetFailed { error } => format!("导入资源失败: {error}"),
     }
 }
 
@@ -650,5 +673,7 @@ fn template_en_us(template: TextTemplate) -> String {
         TextTemplate::CreatedParameter { parameter_name } => {
             format!("Created enum parameter {parameter_name}")
         }
+        TextTemplate::CreatedAsset { asset_name } => format!("Imported asset {asset_name}"),
+        TextTemplate::CreateAssetFailed { error } => format!("Failed to import asset: {error}"),
     }
 }

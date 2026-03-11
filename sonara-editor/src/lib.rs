@@ -13,6 +13,7 @@ use std::{
 };
 
 use crate::content::{AssetOption, EnumParameterOption, parse_variant_list};
+use camino::Utf8PathBuf;
 use eframe::egui;
 use egui_chinese_font::setup_chinese_fonts;
 use i18n::{EditorLocale, TextKey, TextTemplate, template, text};
@@ -128,6 +129,7 @@ pub struct EditorState {
     pub new_event_name: String,
     pub new_bus_name: String,
     pub new_snapshot_name: String,
+    pub new_asset_path: String,
     pub new_parameter_name: String,
     pub new_parameter_variants: String,
     pub status_message: String,
@@ -208,6 +210,7 @@ impl Default for EditorState {
             new_event_name: String::new(),
             new_bus_name: String::new(),
             new_snapshot_name: String::new(),
+            new_asset_path: String::new(),
             new_parameter_name: String::new(),
             new_parameter_variants: String::new(),
             status_message: String::new(),
@@ -691,6 +694,49 @@ impl EditorState {
             snapshot_name,
             bank_name,
         }));
+    }
+
+    fn create_asset_in_project(&mut self) {
+        let source_path = self.new_asset_path.trim().to_owned();
+        if source_path.is_empty() {
+            return;
+        }
+
+        let path = Path::new(&source_path);
+        if !path.exists() {
+            self.status_message = self.tr(TextTemplate::CreateAssetFailed {
+                error: "资源文件不存在".to_owned(),
+            });
+            return;
+        }
+
+        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            self.status_message = self.tr(TextTemplate::CreateAssetFailed {
+                error: "无法从路径推导资源名称".to_owned(),
+            });
+            return;
+        };
+
+        let Ok(source_path) = Utf8PathBuf::from_path_buf(path.to_path_buf()) else {
+            self.status_message = self.tr(TextTemplate::CreateAssetFailed {
+                error: "资源路径不是有效的 UTF-8".to_owned(),
+            });
+            return;
+        };
+
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let asset = sonara_model::AudioAsset::new(file_stem.to_owned(), source_path);
+        let asset_name = asset.name.to_string();
+        project.assets.push(asset);
+        self.new_asset_path.clear();
+        self.on_project_changed();
+        self.status_message = self.tr(TextTemplate::CreatedAsset {
+            asset_name: asset_name.clone(),
+        });
+        self.push_info_log(self.tr(TextTemplate::CreatedAsset { asset_name }));
     }
 
     fn create_enum_parameter(&mut self) {

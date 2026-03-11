@@ -1049,12 +1049,30 @@ impl EditorState {
         let mut should_create_bus = false;
         let mut should_create_snapshot = false;
         let enum_parameters = self.enum_parameter_options();
+        let project_assets: Vec<String> = project
+            .assets
+            .iter()
+            .map(|asset| asset.name.to_string())
+            .collect();
+        let mut should_create_asset = false;
         let mut should_create_parameter = false;
 
         ui.group(|ui| {
             ui.label(RichText::new(self.tx(TextKey::BankContentsEditor)).strong());
 
             ui.label(RichText::new(self.tx(TextKey::CreateObjects)).strong());
+            ui.horizontal(|ui| {
+                ui.label(self.tx(TextKey::NewAssetPath));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_asset_path)
+                        .desired_width(340.0)
+                        .hint_text("audio/music/explore_loop.wav"),
+                );
+                if ui.button(self.tx(TextKey::CreateAsset)).clicked() {
+                    should_create_asset = true;
+                }
+            });
+            ui.label(self.tx(TextKey::AssetImportHint));
             ui.horizontal(|ui| {
                 ui.label(self.tx(TextKey::NewEventName));
                 ui.add(
@@ -1115,6 +1133,16 @@ impl EditorState {
                 }
             });
             ui.label(self.tx(TextKey::EnumParameterHint));
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::ProjectAssets)).strong());
+            if project_assets.is_empty() {
+                ui.label(self.tx(TextKey::NoAssetsInProject));
+            } else {
+                for asset_name in &project_assets {
+                    ui.label(asset_name);
+                }
+            }
 
             ui.separator();
             ui.label(RichText::new(self.tx(TextKey::ProjectParameters)).strong());
@@ -1294,6 +1322,10 @@ impl EditorState {
 
         if should_create_snapshot {
             self.create_snapshot_in_selected_bank();
+        }
+
+        if should_create_asset {
+            self.create_asset_in_project();
         }
 
         if should_create_parameter {
