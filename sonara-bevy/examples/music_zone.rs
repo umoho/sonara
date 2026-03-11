@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use sonara_bevy::{AudioRequestResult, prelude::SonaraAudio, prelude::SonaraFirewheelPlugin};
+use sonara_bevy::{
+    AudioRequestResult,
+    prelude::{EventInstanceState, SonaraAudio, SonaraFirewheelPlugin},
+};
 use sonara_build::CompiledBankPackage;
 use sonara_model::{EventId, ParameterId, ParameterValue};
 use sonara_runtime::{EventInstanceId, Fade};
@@ -24,6 +27,7 @@ fn main() {
         .add_systems(Startup, setup_scene)
         .add_systems(Update, move_player)
         .add_systems(Update, update_music_zone)
+        .add_systems(Update, update_music_loading_state)
         .add_systems(Update, sync_hud_text)
         .run();
 }
@@ -63,6 +67,7 @@ struct MusicZoneState {
     current_state: &'static str,
     current_instance_id: Option<EventInstanceId>,
     inside_zone: bool,
+    playback_status: &'static str,
     hud_text: String,
 }
 
@@ -72,6 +77,7 @@ impl Default for MusicZoneState {
             current_state: "explore",
             current_instance_id: None,
             inside_zone: false,
+            playback_status: "idle",
             hud_text: String::new(),
         }
     }
@@ -107,6 +113,7 @@ fn setup_scene(
     });
     state.current_state = "explore";
     state.inside_zone = false;
+    state.playback_status = "loading";
     refresh_hud_text(&mut state);
 
     commands.spawn((
@@ -275,13 +282,32 @@ fn update_music_zone(
         AudioRequestResult::ParameterSet | AudioRequestResult::Stopped { .. } => None,
     });
     state.current_state = next_state;
+    state.playback_status = "loading";
+    refresh_hud_text(&mut state);
+}
+
+fn update_music_loading_state(audio: NonSend<SonaraAudio>, mut state: ResMut<MusicZoneState>) {
+    let next_status = match state.current_instance_id {
+        Some(instance_id) => match audio.instance_state(instance_id) {
+            EventInstanceState::PendingMedia => "loading",
+            EventInstanceState::Playing => "playing",
+            EventInstanceState::Stopped => "stopped",
+        },
+        None => "idle",
+    };
+
+    if next_status == state.playback_status {
+        return;
+    }
+
+    state.playback_status = next_status;
     refresh_hud_text(&mut state);
 }
 
 fn refresh_hud_text(state: &mut MusicZoneState) {
     state.hud_text = format!(
-        "Sonara music_zone\ncompiled bank file: sonara-app/assets/music_demo/core.bank.json\nWASD or arrow keys move the blue sphere\nenter the red circle -> music_state=combat\noutside the circle -> music_state=explore\ninside zone: {}\ncurrent music_state: {}\ncurrent instance: {:?}",
-        state.inside_zone, state.current_state, state.current_instance_id
+        "Sonara music_zone\ncompiled bank file: sonara-app/assets/music_demo/core.bank.json\nWASD or arrow keys move the blue sphere\nenter the red circle -> music_state=combat\noutside the circle -> music_state=explore\ninside zone: {}\ncurrent music_state: {}\nplayback status: {}\ncurrent instance: {:?}",
+        state.inside_zone, state.current_state, state.playback_status, state.current_instance_id
     );
 }
 

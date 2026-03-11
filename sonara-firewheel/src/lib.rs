@@ -22,8 +22,8 @@ use sonara_model::{
     ParameterValue, Snapshot,
 };
 use sonara_runtime::{
-    AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, RuntimeCommandBuffer,
-    RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
+    AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, PlaybackPlan,
+    RuntimeCommandBuffer, RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -321,6 +321,19 @@ impl FirewheelBackend {
         self.runtime
             .set_emitter_param(emitter_id, parameter_id, value)?;
         Ok(())
+    }
+
+    /// 查询一个事件实例当前对游戏侧可见的播放状态。
+    pub fn instance_state(&self, instance_id: EventInstanceId) -> EventInstanceState {
+        if self.pending_playbacks.contains_key(&instance_id) {
+            EventInstanceState::PendingMedia
+        } else if self.instance_workers.contains_key(&instance_id) {
+            EventInstanceState::Playing
+        } else if self.runtime.active_plan(instance_id).is_some() {
+            EventInstanceState::PendingMedia
+        } else {
+            EventInstanceState::Stopped
+        }
     }
 
     /// 排队一个 emitter 参数更新请求

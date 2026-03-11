@@ -7,6 +7,7 @@ use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
     Bank, BankId, Bus, Event, EventId, ParameterId, ParameterValue, Snapshot, SnapshotId,
 };
+pub use sonara_runtime::EventInstanceState;
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
@@ -335,6 +336,14 @@ impl SonaraAudio {
         self.runtime().active_plan(instance_id)
     }
 
+    /// 查询一个事件实例当前对游戏侧可见的播放状态。
+    pub fn instance_state(&self, instance_id: EventInstanceId) -> EventInstanceState {
+        match &self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.instance_state(instance_id),
+            SonaraBackend::Firewheel(backend) => backend.instance_state(instance_id),
+        }
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {
@@ -486,7 +495,8 @@ pub struct AudioListener {
 /// 便于 Bevy 游戏侧导入的最小预导出。
 pub mod prelude {
     pub use crate::{
-        AudioEmitter, AudioListener, AudioUpdate, SonaraAudio, SonaraFirewheelPlugin, SonaraPlugin,
+        AudioEmitter, AudioListener, AudioUpdate, EventInstanceState, SonaraAudio,
+        SonaraFirewheelPlugin, SonaraPlugin,
     };
 }
 
@@ -690,6 +700,35 @@ mod tests {
 
         assert_eq!(results, vec![AudioRequestResult::Stopped { instance_id }]);
         assert_eq!(audio.active_plan(instance_id), None);
+    }
+
+    #[test]
+    fn instance_state_reports_runtime_playback_lifecycle() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let surface_id = ParameterId::new();
+        let event = make_switch_event(event_id, surface_id, asset_id);
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let instance_id = audio.play(event_id).expect("play should succeed");
+        assert_eq!(
+            audio.instance_state(instance_id),
+            EventInstanceState::Playing
+        );
+
+        audio
+            .stop(instance_id, Fade::IMMEDIATE)
+            .expect("stop should succeed");
+        assert_eq!(
+            audio.instance_state(instance_id),
+            EventInstanceState::Stopped
+        );
     }
 
     #[test]

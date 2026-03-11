@@ -47,6 +47,17 @@ pub struct PlaybackPlan {
     pub asset_ids: Vec<Uuid>,
 }
 
+/// 事件实例当前对游戏侧可见的播放状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventInstanceState {
+    /// 实例已经建立, 但媒体还没准备到可实际发声。
+    PendingMedia,
+    /// 实例已经进入实际播放。
+    Playing,
+    /// 实例不存在或已经停止。
+    Stopped,
+}
+
 /// 运行中的事件实例
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveEventInstance {
@@ -216,6 +227,11 @@ impl QueuedRuntime {
     /// 读取当前活动实例的播放计划。
     pub fn active_plan(&self, instance_id: EventInstanceId) -> Option<&PlaybackPlan> {
         self.runtime.active_plan(instance_id)
+    }
+
+    /// 查询一个事件实例当前对游戏侧可见的播放状态。
+    pub fn instance_state(&self, instance_id: EventInstanceId) -> EventInstanceState {
+        self.runtime.instance_state(instance_id)
     }
 
     /// 取出当前待处理请求。
@@ -595,6 +611,15 @@ impl SonaraRuntime {
         self.active_instances
             .get(&instance_id)
             .map(|instance| &instance.plan)
+    }
+
+    /// 查询一个事件实例当前对游戏侧可见的播放状态。
+    pub fn instance_state(&self, instance_id: EventInstanceId) -> EventInstanceState {
+        if self.active_instances.contains_key(&instance_id) {
+            EventInstanceState::Playing
+        } else {
+            EventInstanceState::Stopped
+        }
     }
 
     /// 读取一个运行中的 snapshot 实例。
@@ -1124,6 +1149,35 @@ mod tests {
 
         assert_eq!(result, RuntimeRequestResult::Stopped { instance_id });
         assert_eq!(runtime.active_plan(instance_id), None);
+    }
+
+    #[test]
+    fn instance_state_reports_playing_then_stopped() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let (sampler_id, sampler) = make_sampler(asset_id);
+        let event = make_event(event_id, sampler_id, vec![sampler]);
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, vec![event])
+            .expect("bank should load");
+
+        let instance_id = runtime.play(event_id).expect("event should play");
+        assert_eq!(
+            runtime.instance_state(instance_id),
+            EventInstanceState::Playing
+        );
+
+        runtime
+            .stop(instance_id, Fade::IMMEDIATE)
+            .expect("stop should succeed");
+        assert_eq!(
+            runtime.instance_state(instance_id),
+            EventInstanceState::Stopped
+        );
     }
 
     #[test]
