@@ -1,7 +1,7 @@
 //! Firewheel 后端适配层
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     num::{NonZeroU32, NonZeroUsize},
 };
 
@@ -66,6 +66,7 @@ pub struct FirewheelBackend {
     runtime: SonaraRuntime,
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
+    known_bank_assets: HashMap<Uuid, BankAsset>,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
     instance_workers: HashMap<EventInstanceId, Vec<WorkerID>>,
     worker_instances: HashMap<WorkerID, EventInstanceId>,
@@ -97,6 +98,7 @@ impl FirewheelBackend {
             runtime,
             context,
             sampler_pool,
+            known_bank_assets: HashMap::new(),
             sample_resources: HashMap::new(),
             instance_workers: HashMap::new(),
             worker_instances: HashMap::new(),
@@ -157,17 +159,29 @@ impl FirewheelBackend {
         &mut self,
         manifest: &BankManifest,
     ) -> Result<(), FirewheelBackendError> {
+        let resident_media: HashSet<Uuid> = manifest.resident_media.iter().copied().collect();
+        let streaming_media: HashSet<Uuid> = manifest.streaming_media.iter().copied().collect();
+
         for asset in &manifest.assets {
-            self.register_bank_asset(asset)?;
+            self.known_bank_assets.insert(asset.id, asset.clone());
+
+            if should_preload_bank_asset(asset, &resident_media, &streaming_media) {
+                self.decode_bank_asset(asset)?;
+            }
         }
 
         Ok(())
     }
 
-    /// 注册一个 compiled bank asset。
+    /// 注册一个 compiled bank asset, 并立即准备可播放资源。
     ///
     /// 这条路径直接面向 bank 编译产物, 避免 backend 继续依赖 authoring 语义。
     pub fn register_bank_asset(&mut self, asset: &BankAsset) -> Result<(), FirewheelBackendError> {
+        self.known_bank_assets.insert(asset.id, asset.clone());
+        self.decode_bank_asset(asset)
+    }
+
+    fn decode_bank_asset(&mut self, asset: &BankAsset) -> Result<(), FirewheelBackendError> {
         let mut loader = symphonium::SymphoniumLoader::new();
         let target_sample_rate = asset
             .import_settings
@@ -224,13 +238,21 @@ impl FirewheelBackend {
         &mut self,
         asset: &AudioAsset,
     ) -> Result<(), FirewheelBackendError> {
-        self.register_bank_asset(&BankAsset {
+        let bank_asset = BankAsset {
             id: asset.id,
             name: asset.name.clone(),
             source_path: asset.source_path.clone(),
             import_settings: asset.import_settings.clone(),
             streaming: asset.streaming,
-        })
+        };
+        self.known_bank_assets
+            .insert(bank_asset.id, bank_asset.clone());
+
+        if asset.streaming == sonara_model::StreamingMode::Streaming {
+            Ok(())
+        } else {
+            self.decode_bank_asset(&bank_asset)
+        }
     }
 
     /// 播放一个未绑定实体的事件
@@ -434,6 +456,7 @@ impl FirewheelBackend {
         asset_id: Uuid,
         bus_volume: f32,
     ) -> Result<(), FirewheelBackendError> {
+        self.ensure_bank_asset_ready(asset_id)?;
         let resource = self
             .sample_resources
             .get(&asset_id)
@@ -459,6 +482,23 @@ impl FirewheelBackend {
         Ok(())
     }
 
+    /// 确保资源在真正播放前已经准备成 Firewheel 可消费的 sample resource。
+    ///
+    /// resident 媒体会在 bank 加载阶段提前完成,
+    /// streaming 媒体则会在首次真正命中播放时按需解码。
+    fn ensure_bank_asset_ready(&mut self, asset_id: Uuid) -> Result<(), FirewheelBackendError> {
+        if self.sample_resources.contains_key(&asset_id) {
+            return Ok(());
+        }
+
+        let asset = self
+            .known_bank_assets
+            .get(&asset_id)
+            .cloned()
+            .ok_or(FirewheelBackendError::AssetNotRegistered(asset_id))?;
+        self.decode_bank_asset(&asset)
+    }
+
     fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
         self.worker_instances.insert(worker_id, instance_id);
         self.instance_workers
@@ -481,4 +521,21 @@ impl FirewheelBackend {
             }
         }
     }
+}
+
+/// 根据 compiled bank manifest 决定资源是否需要在 startup 阶段预解码。
+fn should_preload_bank_asset(
+    asset: &BankAsset,
+    resident_media: &HashSet<Uuid>,
+    streaming_media: &HashSet<Uuid>,
+) -> bool {
+    if resident_media.contains(&asset.id) {
+        return true;
+    }
+
+    if streaming_media.contains(&asset.id) {
+        return false;
+    }
+
+    asset.streaming != sonara_model::StreamingMode::Streaming
 }

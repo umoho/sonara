@@ -32,11 +32,11 @@
           "streaming": "Auto"
         }
       ],
-      "resident_media": [
+      "resident_media": [],
+      "streaming_media": [
         "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
         "019cdd00-60a5-7500-94be-6ee2074da8a6"
-      ],
-      "streaming_media": []
+      ]
     }
   },
   "events": [

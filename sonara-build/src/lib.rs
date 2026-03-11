@@ -18,6 +18,13 @@ use sonara_model::{
 use thiserror::Error;
 use uuid::Uuid;
 
+/// bank 构建后端真正需要的媒体驻留结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedMediaResidency {
+    Resident,
+    Streaming,
+}
+
 /// 构建阶段错误
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BuildError {
@@ -230,6 +237,7 @@ pub fn build_bank(
     let mut bank = Bank::new(name);
     let asset_by_id: HashMap<Uuid, &AudioAsset> =
         assets.iter().map(|asset| (asset.id, asset)).collect();
+    let mut auto_assets_used_by_one_shot = HashSet::new();
     let mut resident_media = HashSet::new();
     let mut streaming_media = HashSet::new();
 
@@ -241,6 +249,12 @@ pub fn build_bank(
             let asset = asset_by_id
                 .get(&asset_id)
                 .ok_or(BuildError::MissingAudioAsset)?;
+
+            if asset.streaming == StreamingMode::Auto
+                && event.kind != sonara_model::EventKind::Persistent
+            {
+                auto_assets_used_by_one_shot.insert(asset_id);
+            }
 
             if !bank
                 .manifest
@@ -256,13 +270,21 @@ pub fn build_bank(
                     streaming: asset.streaming,
                 });
             }
+        }
+    }
 
-            match asset.streaming {
-                StreamingMode::Auto | StreamingMode::Resident => {
-                    resident_media.insert(asset_id);
-                }
-                StreamingMode::Streaming => {
-                    streaming_media.insert(asset_id);
+    // `Auto` 先给一个最小可落地规则:
+    // 只被 `Persistent` 事件引用的资源按 streaming 导出,
+    // 只要被 `OneShot` 引用过, 仍然按 resident 处理, 避免把短音效误分流。
+    for asset in &bank.manifest.assets {
+        match resolve_media_residency(asset, &auto_assets_used_by_one_shot) {
+            ResolvedMediaResidency::Resident => {
+                resident_media.insert(asset.id);
+                streaming_media.remove(&asset.id);
+            }
+            ResolvedMediaResidency::Streaming => {
+                if !resident_media.contains(&asset.id) {
+                    streaming_media.insert(asset.id);
                 }
             }
         }
@@ -275,6 +297,23 @@ pub fn build_bank(
     bank.manifest.streaming_media.sort_unstable();
 
     Ok(bank)
+}
+
+fn resolve_media_residency(
+    asset: &BankAsset,
+    auto_assets_used_by_one_shot: &HashSet<Uuid>,
+) -> ResolvedMediaResidency {
+    match asset.streaming {
+        StreamingMode::Resident => ResolvedMediaResidency::Resident,
+        StreamingMode::Streaming => ResolvedMediaResidency::Streaming,
+        StreamingMode::Auto => {
+            if auto_assets_used_by_one_shot.contains(&asset.id) {
+                ResolvedMediaResidency::Resident
+            } else {
+                ResolvedMediaResidency::Streaming
+            }
+        }
+    }
 }
 
 /// 根据 authoring 项目里的 bank 定义构建一个 runtime bank。
@@ -589,6 +628,59 @@ mod tests {
         assert_eq!(bank.manifest.assets.len(), 2);
         assert_eq!(bank.manifest.resident_media, vec![resident_asset.id]);
         assert_eq!(bank.manifest.streaming_media, vec![streaming_asset.id]);
+    }
+
+    #[test]
+    fn build_bank_treats_auto_assets_for_persistent_events_as_streaming() {
+        let auto_asset = make_asset("music_forest", StreamingMode::Auto);
+        let sampler_id = NodeId::new();
+        let mut event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: sampler_id,
+                asset_id: auto_asset.id,
+            })],
+            sampler_id,
+        );
+        event.kind = EventKind::Persistent;
+
+        let bank = build_bank("music", &[event], &[auto_asset.clone()]).expect("bank should build");
+
+        assert!(bank.manifest.resident_media.is_empty());
+        assert_eq!(bank.manifest.streaming_media, vec![auto_asset.id]);
+    }
+
+    #[test]
+    fn build_bank_keeps_auto_assets_resident_when_any_one_shot_uses_them() {
+        let auto_asset = make_asset("shared_loop", StreamingMode::Auto);
+        let persistent_sampler_id = NodeId::new();
+        let one_shot_sampler_id = NodeId::new();
+
+        let mut persistent_event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: persistent_sampler_id,
+                asset_id: auto_asset.id,
+            })],
+            persistent_sampler_id,
+        );
+        persistent_event.kind = EventKind::Persistent;
+
+        let one_shot_event = make_event(
+            vec![EventContentNode::Sampler(SamplerNode {
+                id: one_shot_sampler_id,
+                asset_id: auto_asset.id,
+            })],
+            one_shot_sampler_id,
+        );
+
+        let bank = build_bank(
+            "mixed",
+            &[persistent_event, one_shot_event],
+            &[auto_asset.clone()],
+        )
+        .expect("bank should build");
+
+        assert_eq!(bank.manifest.resident_media, vec![auto_asset.id]);
+        assert!(bank.manifest.streaming_media.is_empty());
     }
 
     #[test]
