@@ -18,7 +18,8 @@ use sonara_build::{
     compile_project_bank_to_file,
 };
 use sonara_model::{
-    AuthoringProject, BankDefinition, Event, EventKind, ProjectFileError, SpatialMode,
+    AuthoringProject, BankDefinition, Bus, Event, EventContentNode, EventContentRoot, EventKind,
+    NodeId, NodeRef, ProjectFileError, SamplerNode, Snapshot, SpatialMode,
 };
 
 /// 默认打开的 demo project 路径。
@@ -120,6 +121,9 @@ pub struct EditorState {
     pub show_diagnostics_window: bool,
     pub show_log_window: bool,
     pub show_about_window: bool,
+    pub new_event_name: String,
+    pub new_bus_name: String,
+    pub new_snapshot_name: String,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
 }
@@ -146,6 +150,9 @@ impl Default for EditorState {
             show_diagnostics_window: false,
             show_log_window: false,
             show_about_window: false,
+            new_event_name: String::new(),
+            new_bus_name: String::new(),
+            new_snapshot_name: String::new(),
             status_message: String::new(),
             logs: Vec::new(),
         }
@@ -828,6 +835,8 @@ impl EditorState {
         };
 
         let bank_event_ids = bank.events.clone();
+        let bank_bus_ids = bank.buses.clone();
+        let bank_snapshot_ids = bank.snapshots.clone();
         let current_bank_name = bank.name.to_string();
         let current_bank_events: Vec<(String, sonara_model::EventId)> = project
             .events
@@ -841,12 +850,90 @@ impl EditorState {
             .filter(|event| !bank_event_ids.contains(&event.id))
             .map(|event| (event.name.to_string(), event.id))
             .collect();
+        let current_bank_buses: Vec<(String, sonara_model::BusId)> = project
+            .buses
+            .iter()
+            .filter(|bus| bank_bus_ids.contains(&bus.id))
+            .map(|bus| (bus.name.to_string(), bus.id))
+            .collect();
+        let available_buses: Vec<(String, sonara_model::BusId)> = project
+            .buses
+            .iter()
+            .filter(|bus| !bank_bus_ids.contains(&bus.id))
+            .map(|bus| (bus.name.to_string(), bus.id))
+            .collect();
+        let current_bank_snapshots: Vec<(String, sonara_model::SnapshotId)> = project
+            .snapshots
+            .iter()
+            .filter(|snapshot| bank_snapshot_ids.contains(&snapshot.id))
+            .map(|snapshot| (snapshot.name.to_string(), snapshot.id))
+            .collect();
+        let available_snapshots: Vec<(String, sonara_model::SnapshotId)> = project
+            .snapshots
+            .iter()
+            .filter(|snapshot| !bank_snapshot_ids.contains(&snapshot.id))
+            .map(|snapshot| (snapshot.name.to_string(), snapshot.id))
+            .collect();
 
         let mut event_to_remove = None;
         let mut event_to_add = None;
+        let mut bus_to_remove = None;
+        let mut bus_to_add = None;
+        let mut snapshot_to_remove = None;
+        let mut snapshot_to_add = None;
+        let can_create_event = !project.assets.is_empty();
+        let mut should_create_event = false;
+        let mut should_create_bus = false;
+        let mut should_create_snapshot = false;
 
         ui.group(|ui| {
-            ui.label(RichText::new(self.tx(TextKey::EventEditor)).strong());
+            ui.label(RichText::new(self.tx(TextKey::BankContentsEditor)).strong());
+
+            ui.label(RichText::new(self.tx(TextKey::CreateObjects)).strong());
+            ui.horizontal(|ui| {
+                ui.label(self.tx(TextKey::NewEventName));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_event_name)
+                        .desired_width(180.0)
+                        .hint_text("player.new_event"),
+                );
+                if ui
+                    .add_enabled(
+                        can_create_event,
+                        egui::Button::new(self.tx(TextKey::CreateEvent)),
+                    )
+                    .clicked()
+                {
+                    should_create_event = true;
+                }
+            });
+            if !can_create_event {
+                ui.label(self.tx(TextKey::CreateEventNeedsAsset));
+            }
+            ui.horizontal(|ui| {
+                ui.label(self.tx(TextKey::NewBusName));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_bus_name)
+                        .desired_width(180.0)
+                        .hint_text("sfx"),
+                );
+                if ui.button(self.tx(TextKey::CreateBus)).clicked() {
+                    should_create_bus = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(self.tx(TextKey::NewSnapshotName));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_snapshot_name)
+                        .desired_width(180.0)
+                        .hint_text("combat"),
+                );
+                if ui.button(self.tx(TextKey::CreateSnapshot)).clicked() {
+                    should_create_snapshot = true;
+                }
+            });
+
+            ui.separator();
             ui.label(self.tx(TextKey::CurrentBankEvents));
 
             if current_bank_events.is_empty() {
@@ -877,6 +964,70 @@ impl EditorState {
                     });
                 }
             }
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::CurrentBankBuses)).strong());
+
+            if current_bank_buses.is_empty() {
+                ui.label(self.tx(TextKey::NoBuses));
+            } else {
+                for (bus_name, bus_id) in &current_bank_buses {
+                    ui.horizontal(|ui| {
+                        ui.label(bus_name);
+                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
+                            bus_to_remove = Some(*bus_id);
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::AvailableBuses)).strong());
+
+            if available_buses.is_empty() {
+                ui.label(self.tx(TextKey::NoAvailableBuses));
+            } else {
+                for (bus_name, bus_id) in &available_buses {
+                    ui.horizontal(|ui| {
+                        ui.label(bus_name);
+                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
+                            bus_to_add = Some(*bus_id);
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::CurrentBankSnapshots)).strong());
+
+            if current_bank_snapshots.is_empty() {
+                ui.label(self.tx(TextKey::NoSnapshots));
+            } else {
+                for (snapshot_name, snapshot_id) in &current_bank_snapshots {
+                    ui.horizontal(|ui| {
+                        ui.label(snapshot_name);
+                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
+                            snapshot_to_remove = Some(*snapshot_id);
+                        }
+                    });
+                }
+            }
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::AvailableSnapshots)).strong());
+
+            if available_snapshots.is_empty() {
+                ui.label(self.tx(TextKey::NoAvailableSnapshots));
+            } else {
+                for (snapshot_name, snapshot_id) in &available_snapshots {
+                    ui.horizontal(|ui| {
+                        ui.label(snapshot_name);
+                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
+                            snapshot_to_add = Some(*snapshot_id);
+                        }
+                    });
+                }
+            }
         });
 
         if let Some((event_name, event_id)) = event_to_remove {
@@ -901,6 +1052,34 @@ impl EditorState {
                 event_name,
                 bank_name: current_bank_name,
             }));
+        }
+
+        if let Some(bus_id) = bus_to_remove {
+            self.remove_bus_from_selected_bank(bus_id);
+        }
+
+        if let Some(bus_id) = bus_to_add {
+            self.add_bus_to_selected_bank(bus_id);
+        }
+
+        if let Some(snapshot_id) = snapshot_to_remove {
+            self.remove_snapshot_from_selected_bank(snapshot_id);
+        }
+
+        if let Some(snapshot_id) = snapshot_to_add {
+            self.add_snapshot_to_selected_bank(snapshot_id);
+        }
+
+        if should_create_event {
+            self.create_event_in_selected_bank();
+        }
+
+        if should_create_bus {
+            self.create_bus_in_selected_bank();
+        }
+
+        if should_create_snapshot {
+            self.create_snapshot_in_selected_bank();
         }
     }
 
@@ -941,6 +1120,194 @@ impl EditorState {
             self.last_export = None;
             self.refresh_validation();
         }
+    }
+
+    fn add_bus_to_selected_bank(&mut self, bus_id: sonara_model::BusId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        if !bank.buses.contains(&bus_id) {
+            bank.buses.push(bus_id);
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
+    }
+
+    fn remove_bus_from_selected_bank(&mut self, bus_id: sonara_model::BusId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        let original_len = bank.buses.len();
+        bank.buses.retain(|id| *id != bus_id);
+        if bank.buses.len() != original_len {
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
+    }
+
+    fn add_snapshot_to_selected_bank(&mut self, snapshot_id: sonara_model::SnapshotId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        if !bank.snapshots.contains(&snapshot_id) {
+            bank.snapshots.push(snapshot_id);
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
+    }
+
+    fn remove_snapshot_from_selected_bank(&mut self, snapshot_id: sonara_model::SnapshotId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.as_deref() else {
+            return;
+        };
+        let Some(bank) = project.banks.iter_mut().find(|bank| bank.name == bank_name) else {
+            return;
+        };
+
+        let original_len = bank.snapshots.len();
+        bank.snapshots.retain(|id| *id != snapshot_id);
+        if bank.snapshots.len() != original_len {
+            self.has_unsaved_changes = true;
+            self.last_export = None;
+            self.refresh_validation();
+        }
+    }
+
+    fn create_event_in_selected_bank(&mut self) {
+        let event_name = self.new_event_name.trim().to_owned();
+        if event_name.is_empty() {
+            return;
+        }
+
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.clone() else {
+            return;
+        };
+        let Some(first_asset) = project.assets.first() else {
+            return;
+        };
+
+        let sampler_id = NodeId::new();
+        let event = Event {
+            id: sonara_model::EventId::new(),
+            name: event_name.clone().into(),
+            kind: EventKind::OneShot,
+            root: EventContentRoot {
+                root: NodeRef { id: sampler_id },
+                nodes: vec![EventContentNode::Sampler(SamplerNode {
+                    id: sampler_id,
+                    asset_id: first_asset.id,
+                })],
+            },
+            default_bus: None,
+            spatial: SpatialMode::TwoD,
+            default_parameters: Vec::new(),
+            voice_limit: None,
+            steal_policy: None,
+        };
+        let event_id = event.id;
+        project.events.push(event);
+        self.new_event_name.clear();
+        self.add_event_to_selected_bank(event_id);
+        self.status_message = self.tr(TextTemplate::CreatedEventInBank {
+            event_name: event_name.clone(),
+            bank_name: bank_name.clone(),
+        });
+        self.push_info_log(self.tr(TextTemplate::CreatedEventInBank {
+            event_name,
+            bank_name,
+        }));
+    }
+
+    fn create_bus_in_selected_bank(&mut self) {
+        let bus_name = self.new_bus_name.trim().to_owned();
+        if bus_name.is_empty() {
+            return;
+        }
+
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.clone() else {
+            return;
+        };
+
+        let bus = Bus::new(bus_name.clone());
+        let bus_id = bus.id;
+        project.buses.push(bus);
+        self.new_bus_name.clear();
+        self.add_bus_to_selected_bank(bus_id);
+        self.status_message = self.tr(TextTemplate::CreatedBusInBank {
+            bus_name: bus_name.clone(),
+            bank_name: bank_name.clone(),
+        });
+        self.push_info_log(self.tr(TextTemplate::CreatedBusInBank {
+            bus_name,
+            bank_name,
+        }));
+    }
+
+    fn create_snapshot_in_selected_bank(&mut self) {
+        let snapshot_name = self.new_snapshot_name.trim().to_owned();
+        if snapshot_name.is_empty() {
+            return;
+        }
+
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+        let Some(bank_name) = self.selected_bank_name.clone() else {
+            return;
+        };
+
+        let snapshot = Snapshot {
+            id: sonara_model::SnapshotId::new(),
+            name: snapshot_name.clone().into(),
+            fade_in_seconds: 0.0,
+            fade_out_seconds: 0.0,
+            targets: Vec::new(),
+        };
+        let snapshot_id = snapshot.id;
+        project.snapshots.push(snapshot);
+        self.new_snapshot_name.clear();
+        self.add_snapshot_to_selected_bank(snapshot_id);
+        self.status_message = self.tr(TextTemplate::CreatedSnapshotInBank {
+            snapshot_name: snapshot_name.clone(),
+            bank_name: bank_name.clone(),
+        });
+        self.push_info_log(self.tr(TextTemplate::CreatedSnapshotInBank {
+            snapshot_name,
+            bank_name,
+        }));
     }
 
     fn refresh_validation(&mut self) {
