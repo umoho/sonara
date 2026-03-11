@@ -1174,6 +1174,7 @@ impl EditorState {
                             });
                     }
                 });
+                columns[0].add_space(4.0);
                 columns[0].horizontal(|ui| {
                     if ui
                         .add_enabled(
@@ -1218,6 +1219,9 @@ impl EditorState {
                                 self.new_event_name.clear();
                             }
                         });
+                        if !can_create_event {
+                            ui.label(self.tx(TextKey::CreateEventNeedsAsset));
+                        }
                         ui.separator();
                     }
                     if available_events.is_empty() {
@@ -1276,9 +1280,6 @@ impl EditorState {
                         }
                     }
                 });
-                if !can_create_event && self.show_new_event_row {
-                    columns[1].label(self.tx(TextKey::CreateEventNeedsAsset));
-                }
             });
 
             ui.separator();
@@ -1320,6 +1321,7 @@ impl EditorState {
                             });
                     }
                 });
+                columns[0].add_space(4.0);
                 columns[0].horizontal(|ui| {
                     if ui
                         .add_enabled(
@@ -1445,6 +1447,7 @@ impl EditorState {
                             });
                     }
                 });
+                columns[0].add_space(4.0);
                 columns[0].horizontal(|ui| {
                     if ui
                         .add_enabled(
