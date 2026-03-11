@@ -1,0 +1,112 @@
+{
+  "name": "demo",
+  "assets": [
+    {
+      "id": "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
+      "name": "litesaturation-orchestra-fantasy-111168",
+      "source_path": "private_assets/litesaturation-orchestra-fantasy-111168.mp3",
+      "import_settings": {
+        "normalize": false,
+        "target_sample_rate": null
+      },
+      "streaming": "Auto",
+      "loop_region": null,
+      "analysis": null
+    },
+    {
+      "id": "019cdd00-60a5-7500-94be-6ee2074da8a6",
+      "name": "paulyudin-epic-battle-159260",
+      "source_path": "private_assets/paulyudin-epic-battle-159260.mp3",
+      "import_settings": {
+        "normalize": false,
+        "target_sample_rate": null
+      },
+      "streaming": "Auto",
+      "loop_region": null,
+      "analysis": null
+    }
+  ],
+  "parameters": [
+    {
+      "Enum": {
+        "id": "019cdce0-7065-75b1-a60d-88721fb4114c",
+        "name": "music_state",
+        "scope": "Global",
+        "default_value": "explore",
+        "variants": [
+          "explore",
+          "combat"
+        ]
+      }
+    }
+  ],
+  "buses": [],
+  "snapshots": [],
+  "events": [
+    {
+      "id": "019cdce1-3ade-7982-9802-d28d5f9c7db9",
+      "name": "music.play",
+      "kind": "Persistent",
+      "root": {
+        "root": {
+          "id": "019cdd08-12cf-72c1-ac7c-bbac9d062279"
+        },
+        "nodes": [
+          {
+            "Switch": {
+              "id": "019cdd08-12cf-72c1-ac7c-bbac9d062279",
+              "parameter_id": "019cdce0-7065-75b1-a60d-88721fb4114c",
+              "cases": [
+                {
+                  "variant": "explore",
+                  "child": {
+                    "id": "019cdd08-12cf-72c1-ac7c-bbb47c8a0443"
+                  }
+                },
+                {
+                  "variant": "combat",
+                  "child": {
+                    "id": "019cdd08-12cf-72c1-ac7c-bbc6bb31ce17"
+                  }
+                }
+              ],
+              "default_case": {
+                "id": "019cdd08-12cf-72c1-ac7c-bbb47c8a0443"
+              }
+            }
+          },
+          {
+            "Sampler": {
+              "id": "019cdd08-12cf-72c1-ac7c-bbb47c8a0443",
+              "asset_id": "019cdd00-3ff9-7bd3-8512-229ff9a77dad"
+            }
+          },
+          {
+            "Sampler": {
+              "id": "019cdd08-12cf-72c1-ac7c-bbc6bb31ce17",
+              "asset_id": "019cdd00-60a5-7500-94be-6ee2074da8a6"
+            }
+          }
+        ]
+      },
+      "default_bus": null,
+      "spatial": "TwoD",
+      "default_parameters": [
+        "019cdce0-7065-75b1-a60d-88721fb4114c"
+      ],
+      "voice_limit": null,
+      "steal_policy": null
+    }
+  ],
+  "banks": [
+    {
+      "id": "01957a9e-42f2-7000-8000-000000000501",
+      "name": "core",
+      "events": [
+        "019cdce1-3ade-7982-9802-d28d5f9c7db9"
+      ],
+      "buses": [],
+      "snapshots": []
+    }
+  ]
+}
