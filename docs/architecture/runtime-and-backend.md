@@ -22,6 +22,7 @@ backend 负责：
 - 把 `PlaybackPlan` 变成真实播放
 - 管理播放对象生命周期
 - 和底层音频系统交互
+- 推进实例播放状态
 
 一句话：
 
@@ -71,10 +72,13 @@ backend 负责：
 
 - 启动 Firewheel/CPAL 输出流
 - 从 `BankManifest` 注册资源
-- 解码 wav
+- 准备 resident 资源
+- 后台预热 streaming 资源
 - 管理 sample resource
 - 消费 `PlaybackPlan.asset_ids`
 - 创建 Firewheel worker
+- 挂起依赖未就绪 streaming 资源的播放
+- 在资源就绪后自动启动挂起播放
 - stop 与 worker 生命周期同步
 
 也就是说，backend 当前真正关心的是：
@@ -82,6 +86,16 @@ backend 负责：
 - `BankManifest`
 - `BankAsset`
 - `PlaybackPlan.asset_ids`
+
+当前资源策略是：
+
+- `resident_media`
+  - 在加载 compiled bank 时准备好
+- `streaming_media`
+  - 不在 startup 阶段同步整包解码
+  - 由 backend 在后台预热
+  - 如果播放时还没准备好，对应实例先进入 `PendingMedia`
+  - 等资源就绪后，backend 在后续 `update()` 中自动启动
 
 ## 典型执行路径
 
@@ -96,6 +110,16 @@ backend 负责：
 7. backend 找到已注册媒体
 8. backend 创建真实播放对象
 9. 声音输出到设备
+
+如果某次播放依赖 streaming 资源且媒体尚未就绪，则路径会变成：
+
+1. runtime 仍然生成 `PlaybackPlan`
+2. backend 发现对应 streaming 资源未就绪
+3. 实例状态进入 `PendingMedia`
+4. backend 后台预热资源
+5. 后续 `update()` 中资源完成注册
+6. backend 自动启动先前挂起的实例
+7. 实例状态推进到 `Playing`
 
 ## 为什么这个边界重要
 
@@ -113,6 +137,14 @@ backend 负责：
   - 优先加在 `sonara-firewheel`
 - ECS 触发方式
   - 放在 `sonara-bevy`
+
+当前对外可查询的实例状态包括：
+
+- `PendingMedia`
+- `Playing`
+- `Stopped`
+
+这层状态由 runtime 定义，由 backend 推进，Bevy 集成层只负责转发给游戏侧查询。
 
 ## 当前还有哪些能力没补完
 

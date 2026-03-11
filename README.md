@@ -91,6 +91,29 @@ cargo run --example surface_walk -p sonara-bevy
 - 通过 `WASD` / 方向键控制球体移动
 - 在左上角 Bevy UI HUD 中显示说明和最近一次脚步解析结果
 
+音乐状态区域 demo：
+
+```bash
+cargo run --example music_zone -p sonara-bevy
+```
+
+这个 example 会：
+
+- 从 `sonara-app/assets/music_demo/core.bank.json` 读取 compiled bank
+- 启动真实 Bevy 3D 场景和 Firewheel 输出
+- 通过 `WASD` / 方向键控制球体移动
+- 在区域内把全局参数 `music_state` 设为 `combat`
+- 在区域外把全局参数 `music_state` 设为 `explore`
+- 在左上角 Bevy UI HUD 中显示当前音乐状态和实例状态
+
+当前 streaming 音乐行为：
+
+- resident 资源会在 bank 加载时准备好
+- streaming 资源不会在 startup 阶段同步整包解码
+- backend 会后台预热 streaming 资源
+- 如果首播时资源还没就绪，实例会先进入 `PendingMedia`
+- 资源就绪后，backend 会在后续 `update()` 中自动启动播放
+
 注意：
 
 - `sonara-app` 当前是 backend demo，不是最终应用形态。

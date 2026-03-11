@@ -67,6 +67,7 @@ Sonara 是一个面向游戏的、Rust-first 的开源交互音频中间件。
 - emitter / 参数管理
 - 事件树解析
 - `PlaybackPlan` 生成
+- `EventInstanceState`
 
 runtime 关心的是“该播什么”，不直接负责真实音频输出。
 
@@ -76,9 +77,11 @@ Firewheel backend 适配层，负责：
 
 - 启动真实输出流
 - 从 compiled `BankManifest` 注册资源
-- 解码 wav
+- 准备 resident 资源
+- 后台预热 streaming 资源
 - 消费 `PlaybackPlan.asset_ids`
 - 创建真实 worker 播放
+- 推进 `PendingMedia -> Playing` 的实例状态
 - stop 和 worker 生命周期同步
 
 ### `sonara-bevy`
@@ -131,6 +134,20 @@ cargo run --example surface_walk -p sonara-bevy
 - 键盘控制
 - emitter 参数驱动的表面脚步解析
 - Firewheel 实际出声
+
+### 音乐状态区域 demo
+
+```bash
+cargo run --example music_zone -p sonara-bevy
+```
+
+用于验证：
+
+- 从 compiled bank 读取音乐状态切换内容
+- 全局参数 `music_state = explore / combat`
+- resident / streaming 资源在 backend 的不同加载策略
+- `EventInstanceState::PendingMedia / Playing / Stopped`
+- Bevy UI HUD 中的运行时状态反馈
 
 ## 当前还不完整的能力
 
