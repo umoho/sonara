@@ -1050,9 +1050,6 @@ impl EditorState {
         let mut snapshot_to_add = None;
         let mut snapshot_to_delete = None;
         let can_create_event = !project.assets.is_empty();
-        let mut should_create_event = false;
-        let mut should_create_bus = false;
-        let mut should_create_snapshot = false;
         let enum_parameters = self.enum_parameter_options();
         let project_asset_items: Vec<(String, uuid::Uuid)> = project
             .assets
@@ -1080,48 +1077,6 @@ impl EditorState {
                 }
             });
             ui.label(self.tx(TextKey::AssetImportHint));
-            ui.horizontal(|ui| {
-                ui.label(self.tx(TextKey::NewEventName));
-                ui.add(
-                    TextEdit::singleline(&mut self.new_event_name)
-                        .desired_width(180.0)
-                        .hint_text("player.new_event"),
-                );
-                if ui
-                    .add_enabled(
-                        can_create_event,
-                        egui::Button::new(self.tx(TextKey::CreateEvent)),
-                    )
-                    .clicked()
-                {
-                    should_create_event = true;
-                }
-            });
-            if !can_create_event {
-                ui.label(self.tx(TextKey::CreateEventNeedsAsset));
-            }
-            ui.horizontal(|ui| {
-                ui.label(self.tx(TextKey::NewBusName));
-                ui.add(
-                    TextEdit::singleline(&mut self.new_bus_name)
-                        .desired_width(180.0)
-                        .hint_text("sfx"),
-                );
-                if ui.button(self.tx(TextKey::CreateBus)).clicked() {
-                    should_create_bus = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label(self.tx(TextKey::NewSnapshotName));
-                ui.add(
-                    TextEdit::singleline(&mut self.new_snapshot_name)
-                        .desired_width(180.0)
-                        .hint_text("combat"),
-                );
-                if ui.button(self.tx(TextKey::CreateSnapshot)).clicked() {
-                    should_create_snapshot = true;
-                }
-            });
             ui.horizontal(|ui| {
                 ui.label(self.tx(TextKey::NewParameterName));
                 ui.add(
@@ -1181,128 +1136,399 @@ impl EditorState {
             }
 
             ui.separator();
-            ui.label(self.tx(TextKey::CurrentBankEvents));
+            ui.label(RichText::new(self.tx(TextKey::Events)).strong());
+            ui.columns(2, |columns| {
+                let current_selected_event = match self.selected_item {
+                    Some(SelectedItem::Event(event_id))
+                        if current_bank_events.iter().any(|(_, id)| *id == event_id) =>
+                    {
+                        Some(event_id)
+                    }
+                    _ => None,
+                };
+                let available_selected_event = match self.selected_item {
+                    Some(SelectedItem::Event(event_id))
+                        if available_events.iter().any(|(_, id)| *id == event_id) =>
+                    {
+                        Some(event_id)
+                    }
+                    _ => None,
+                };
 
-            if current_bank_events.is_empty() {
-                ui.label(self.tx(TextKey::NoEvents));
-            } else {
-                for (event_name, event_id) in &current_bank_events {
-                    ui.horizontal(|ui| {
-                        let selected = self.selected_item == Some(SelectedItem::Event(*event_id));
-                        if ui.selectable_label(selected, event_name).clicked() {
-                            self.selected_item = Some(SelectedItem::Event(*event_id));
+                columns[0].label(RichText::new(self.tx(TextKey::CurrentBankEvents)).strong());
+                egui::Frame::group(columns[0].style()).show(&mut columns[0], |ui| {
+                    ui.set_min_height(140.0);
+                    if current_bank_events.is_empty() {
+                        ui.label(self.tx(TextKey::NoEvents));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("current_bank_events_scroll")
+                            .show(ui, |ui| {
+                                for (event_name, event_id) in &current_bank_events {
+                                    let selected =
+                                        self.selected_item == Some(SelectedItem::Event(*event_id));
+                                    if ui.selectable_label(selected, event_name).clicked() {
+                                        self.selected_item = Some(SelectedItem::Event(*event_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[0].horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            current_selected_event.is_some(),
+                            egui::Button::new(self.tx(TextKey::RemoveFromBank)),
+                        )
+                        .clicked()
+                    {
+                        let event_id = current_selected_event.expect("checked above");
+                        if let Some((event_name, _)) =
+                            current_bank_events.iter().find(|(_, id)| *id == event_id)
+                        {
+                            event_to_remove = Some((event_name.clone(), event_id));
                         }
-                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
-                            event_to_remove = Some((event_name.clone(), *event_id));
+                    }
+                });
+
+                columns[1].label(RichText::new(self.tx(TextKey::AvailableEvents)).strong());
+                egui::Frame::group(columns[1].style()).show(&mut columns[1], |ui| {
+                    ui.set_min_height(140.0);
+                    if self.show_new_event_row {
+                        ui.horizontal(|ui| {
+                            let input_width = (ui.available_width() - 120.0).max(80.0);
+                            let response = ui.add(
+                                TextEdit::singleline(&mut self.new_event_name)
+                                    .desired_width(input_width)
+                                    .hint_text("player.new_event"),
+                            );
+                            let submit = ui
+                                .add_enabled(
+                                    can_create_event,
+                                    egui::Button::new(self.tx(TextKey::Confirm)),
+                                )
+                                .clicked()
+                                || (response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                            if submit && self.create_event_in_selected_bank() {
+                                self.show_new_event_row = false;
+                            }
+                            if ui.button(self.tx(TextKey::Cancel)).clicked() {
+                                self.show_new_event_row = false;
+                                self.new_event_name.clear();
+                            }
+                        });
+                        ui.separator();
+                    }
+                    if available_events.is_empty() {
+                        ui.label(self.tx(TextKey::NoAvailableEvents));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("available_events_scroll")
+                            .show(ui, |ui| {
+                                for (event_name, event_id) in &available_events {
+                                    let selected =
+                                        self.selected_item == Some(SelectedItem::Event(*event_id));
+                                    if ui.selectable_label(selected, event_name).clicked() {
+                                        self.selected_item = Some(SelectedItem::Event(*event_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[1].add_space(4.0);
+                columns[1].horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            can_create_event,
+                            egui::Button::new(self.tx(TextKey::CreateEvent)),
+                        )
+                        .clicked()
+                    {
+                        self.show_new_event_row = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_event.is_some(),
+                            egui::Button::new(self.tx(TextKey::AddToBank)),
+                        )
+                        .clicked()
+                    {
+                        let event_id = available_selected_event.expect("checked above");
+                        if let Some((event_name, _)) =
+                            available_events.iter().find(|(_, id)| *id == event_id)
+                        {
+                            event_to_add = Some((event_name.clone(), event_id));
                         }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            event_to_delete = Some((event_name.clone(), *event_id));
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_event.is_some(),
+                            egui::Button::new(self.tx(TextKey::DeleteFromProject)),
+                        )
+                        .clicked()
+                    {
+                        let event_id = available_selected_event.expect("checked above");
+                        if let Some((event_name, _)) =
+                            available_events.iter().find(|(_, id)| *id == event_id)
+                        {
+                            event_to_delete = Some((event_name.clone(), event_id));
                         }
-                    });
+                    }
+                });
+                if !can_create_event && self.show_new_event_row {
+                    columns[1].label(self.tx(TextKey::CreateEventNeedsAsset));
                 }
-            }
+            });
 
             ui.separator();
-            ui.label(RichText::new(self.tx(TextKey::AvailableEvents)).strong());
+            ui.label(RichText::new(self.tx(TextKey::Buses)).strong());
+            ui.columns(2, |columns| {
+                let current_selected_bus = match self.selected_item {
+                    Some(SelectedItem::Bus(bus_id))
+                        if current_bank_buses.iter().any(|(_, id)| *id == bus_id) =>
+                    {
+                        Some(bus_id)
+                    }
+                    _ => None,
+                };
+                let available_selected_bus = match self.selected_item {
+                    Some(SelectedItem::Bus(bus_id))
+                        if available_buses.iter().any(|(_, id)| *id == bus_id) =>
+                    {
+                        Some(bus_id)
+                    }
+                    _ => None,
+                };
 
-            if available_events.is_empty() {
-                ui.label(self.tx(TextKey::NoAvailableEvents));
-            } else {
-                for (event_name, event_id) in &available_events {
-                    ui.horizontal(|ui| {
-                        ui.label(event_name);
-                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
-                            event_to_add = Some((event_name.clone(), *event_id));
+                columns[0].label(RichText::new(self.tx(TextKey::CurrentBankBuses)).strong());
+                egui::Frame::group(columns[0].style()).show(&mut columns[0], |ui| {
+                    ui.set_min_height(120.0);
+                    if current_bank_buses.is_empty() {
+                        ui.label(self.tx(TextKey::NoBuses));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("current_bank_buses_scroll")
+                            .show(ui, |ui| {
+                                for (bus_name, bus_id) in &current_bank_buses {
+                                    let selected =
+                                        self.selected_item == Some(SelectedItem::Bus(*bus_id));
+                                    if ui.selectable_label(selected, bus_name).clicked() {
+                                        self.selected_item = Some(SelectedItem::Bus(*bus_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[0].horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            current_selected_bus.is_some(),
+                            egui::Button::new(self.tx(TextKey::RemoveFromBank)),
+                        )
+                        .clicked()
+                    {
+                        bus_to_remove = current_selected_bus;
+                    }
+                });
+
+                columns[1].label(RichText::new(self.tx(TextKey::AvailableBuses)).strong());
+                egui::Frame::group(columns[1].style()).show(&mut columns[1], |ui| {
+                    ui.set_min_height(120.0);
+                    if self.show_new_bus_row {
+                        ui.horizontal(|ui| {
+                            let input_width = (ui.available_width() - 120.0).max(80.0);
+                            let response = ui.add(
+                                TextEdit::singleline(&mut self.new_bus_name)
+                                    .desired_width(input_width)
+                                    .hint_text("sfx"),
+                            );
+                            let submit = ui.button(self.tx(TextKey::Confirm)).clicked()
+                                || (response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                            if submit && self.create_bus_in_selected_bank() {
+                                self.show_new_bus_row = false;
+                            }
+                            if ui.button(self.tx(TextKey::Cancel)).clicked() {
+                                self.show_new_bus_row = false;
+                                self.new_bus_name.clear();
+                            }
+                        });
+                        ui.separator();
+                    }
+                    if available_buses.is_empty() {
+                        ui.label(self.tx(TextKey::NoAvailableBuses));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("available_buses_scroll")
+                            .show(ui, |ui| {
+                                for (bus_name, bus_id) in &available_buses {
+                                    let selected =
+                                        self.selected_item == Some(SelectedItem::Bus(*bus_id));
+                                    if ui.selectable_label(selected, bus_name).clicked() {
+                                        self.selected_item = Some(SelectedItem::Bus(*bus_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[1].add_space(4.0);
+                columns[1].horizontal(|ui| {
+                    if ui.button(self.tx(TextKey::CreateBus)).clicked() {
+                        self.show_new_bus_row = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_bus.is_some(),
+                            egui::Button::new(self.tx(TextKey::AddToBank)),
+                        )
+                        .clicked()
+                    {
+                        bus_to_add = available_selected_bus;
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_bus.is_some(),
+                            egui::Button::new(self.tx(TextKey::DeleteFromProject)),
+                        )
+                        .clicked()
+                    {
+                        let bus_id = available_selected_bus.expect("checked above");
+                        if let Some((bus_name, _)) =
+                            available_buses.iter().find(|(_, id)| *id == bus_id)
+                        {
+                            bus_to_delete = Some((bus_id, bus_name.clone()));
                         }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            event_to_delete = Some((event_name.clone(), *event_id));
-                        }
-                    });
-                }
-            }
+                    }
+                });
+            });
 
             ui.separator();
-            ui.label(RichText::new(self.tx(TextKey::CurrentBankBuses)).strong());
+            ui.label(RichText::new(self.tx(TextKey::Snapshots)).strong());
+            ui.columns(2, |columns| {
+                let current_selected_snapshot = match self.selected_item {
+                    Some(SelectedItem::Snapshot(snapshot_id))
+                        if current_bank_snapshots
+                            .iter()
+                            .any(|(_, id)| *id == snapshot_id) =>
+                    {
+                        Some(snapshot_id)
+                    }
+                    _ => None,
+                };
+                let available_selected_snapshot = match self.selected_item {
+                    Some(SelectedItem::Snapshot(snapshot_id))
+                        if available_snapshots.iter().any(|(_, id)| *id == snapshot_id) =>
+                    {
+                        Some(snapshot_id)
+                    }
+                    _ => None,
+                };
 
-            if current_bank_buses.is_empty() {
-                ui.label(self.tx(TextKey::NoBuses));
-            } else {
-                for (bus_name, bus_id) in &current_bank_buses {
-                    ui.horizontal(|ui| {
-                        let selected = self.selected_item == Some(SelectedItem::Bus(*bus_id));
-                        if ui.selectable_label(selected, bus_name).clicked() {
-                            self.selected_item = Some(SelectedItem::Bus(*bus_id));
-                        }
-                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
-                            bus_to_remove = Some(*bus_id);
-                        }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            bus_to_delete = Some((*bus_id, bus_name.clone()));
-                        }
-                    });
-                }
-            }
+                columns[0].label(RichText::new(self.tx(TextKey::CurrentBankSnapshots)).strong());
+                egui::Frame::group(columns[0].style()).show(&mut columns[0], |ui| {
+                    ui.set_min_height(120.0);
+                    if current_bank_snapshots.is_empty() {
+                        ui.label(self.tx(TextKey::NoSnapshots));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("current_bank_snapshots_scroll")
+                            .show(ui, |ui| {
+                                for (snapshot_name, snapshot_id) in &current_bank_snapshots {
+                                    let selected = self.selected_item
+                                        == Some(SelectedItem::Snapshot(*snapshot_id));
+                                    if ui.selectable_label(selected, snapshot_name).clicked() {
+                                        self.selected_item =
+                                            Some(SelectedItem::Snapshot(*snapshot_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[0].horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            current_selected_snapshot.is_some(),
+                            egui::Button::new(self.tx(TextKey::RemoveFromBank)),
+                        )
+                        .clicked()
+                    {
+                        snapshot_to_remove = current_selected_snapshot;
+                    }
+                });
 
-            ui.separator();
-            ui.label(RichText::new(self.tx(TextKey::AvailableBuses)).strong());
-
-            if available_buses.is_empty() {
-                ui.label(self.tx(TextKey::NoAvailableBuses));
-            } else {
-                for (bus_name, bus_id) in &available_buses {
-                    ui.horizontal(|ui| {
-                        ui.label(bus_name);
-                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
-                            bus_to_add = Some(*bus_id);
+                columns[1].label(RichText::new(self.tx(TextKey::AvailableSnapshots)).strong());
+                egui::Frame::group(columns[1].style()).show(&mut columns[1], |ui| {
+                    ui.set_min_height(120.0);
+                    if self.show_new_snapshot_row {
+                        ui.horizontal(|ui| {
+                            let input_width = (ui.available_width() - 120.0).max(80.0);
+                            let response = ui.add(
+                                TextEdit::singleline(&mut self.new_snapshot_name)
+                                    .desired_width(input_width)
+                                    .hint_text("combat"),
+                            );
+                            let submit = ui.button(self.tx(TextKey::Confirm)).clicked()
+                                || (response.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                            if submit && self.create_snapshot_in_selected_bank() {
+                                self.show_new_snapshot_row = false;
+                            }
+                            if ui.button(self.tx(TextKey::Cancel)).clicked() {
+                                self.show_new_snapshot_row = false;
+                                self.new_snapshot_name.clear();
+                            }
+                        });
+                        ui.separator();
+                    }
+                    if available_snapshots.is_empty() {
+                        ui.label(self.tx(TextKey::NoAvailableSnapshots));
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .id_salt("available_snapshots_scroll")
+                            .show(ui, |ui| {
+                                for (snapshot_name, snapshot_id) in &available_snapshots {
+                                    let selected = self.selected_item
+                                        == Some(SelectedItem::Snapshot(*snapshot_id));
+                                    if ui.selectable_label(selected, snapshot_name).clicked() {
+                                        self.selected_item =
+                                            Some(SelectedItem::Snapshot(*snapshot_id));
+                                    }
+                                }
+                            });
+                    }
+                });
+                columns[1].add_space(4.0);
+                columns[1].horizontal(|ui| {
+                    if ui.button(self.tx(TextKey::CreateSnapshot)).clicked() {
+                        self.show_new_snapshot_row = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_snapshot.is_some(),
+                            egui::Button::new(self.tx(TextKey::AddToBank)),
+                        )
+                        .clicked()
+                    {
+                        snapshot_to_add = available_selected_snapshot;
+                    }
+                    if ui
+                        .add_enabled(
+                            available_selected_snapshot.is_some(),
+                            egui::Button::new(self.tx(TextKey::DeleteFromProject)),
+                        )
+                        .clicked()
+                    {
+                        let snapshot_id = available_selected_snapshot.expect("checked above");
+                        if let Some((snapshot_name, _)) = available_snapshots
+                            .iter()
+                            .find(|(_, id)| *id == snapshot_id)
+                        {
+                            snapshot_to_delete = Some((snapshot_id, snapshot_name.clone()));
                         }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            bus_to_delete = Some((*bus_id, bus_name.clone()));
-                        }
-                    });
-                }
-            }
-
-            ui.separator();
-            ui.label(RichText::new(self.tx(TextKey::CurrentBankSnapshots)).strong());
-
-            if current_bank_snapshots.is_empty() {
-                ui.label(self.tx(TextKey::NoSnapshots));
-            } else {
-                for (snapshot_name, snapshot_id) in &current_bank_snapshots {
-                    ui.horizontal(|ui| {
-                        let selected =
-                            self.selected_item == Some(SelectedItem::Snapshot(*snapshot_id));
-                        if ui.selectable_label(selected, snapshot_name).clicked() {
-                            self.selected_item = Some(SelectedItem::Snapshot(*snapshot_id));
-                        }
-                        if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
-                            snapshot_to_remove = Some(*snapshot_id);
-                        }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            snapshot_to_delete = Some((*snapshot_id, snapshot_name.clone()));
-                        }
-                    });
-                }
-            }
-
-            ui.separator();
-            ui.label(RichText::new(self.tx(TextKey::AvailableSnapshots)).strong());
-
-            if available_snapshots.is_empty() {
-                ui.label(self.tx(TextKey::NoAvailableSnapshots));
-            } else {
-                for (snapshot_name, snapshot_id) in &available_snapshots {
-                    ui.horizontal(|ui| {
-                        ui.label(snapshot_name);
-                        if ui.button(self.tx(TextKey::AddToBank)).clicked() {
-                            snapshot_to_add = Some(*snapshot_id);
-                        }
-                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
-                            snapshot_to_delete = Some((*snapshot_id, snapshot_name.clone()));
-                        }
-                    });
-                }
-            }
+                    }
+                });
+            });
         });
 
         if let Some((event_name, event_id)) = event_to_remove {
@@ -1373,18 +1599,6 @@ impl EditorState {
             self.delete_parameter_from_project(parameter_id);
             self.status_message = format!("已删除参数 {parameter_name}");
             self.push_info_log(format!("已删除参数 {parameter_name}"));
-        }
-
-        if should_create_event {
-            self.create_event_in_selected_bank();
-        }
-
-        if should_create_bus {
-            self.create_bus_in_selected_bank();
-        }
-
-        if should_create_snapshot {
-            self.create_snapshot_in_selected_bank();
         }
 
         if should_create_asset {

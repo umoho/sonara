@@ -128,6 +128,9 @@ pub struct EditorState {
     pub show_diagnostics_window: bool,
     pub show_log_window: bool,
     pub show_about_window: bool,
+    pub show_new_event_row: bool,
+    pub show_new_bus_row: bool,
+    pub show_new_snapshot_row: bool,
     pub new_event_name: String,
     pub new_bus_name: String,
     pub new_snapshot_name: String,
@@ -209,6 +212,9 @@ impl Default for EditorState {
             show_diagnostics_window: false,
             show_log_window: false,
             show_about_window: false,
+            show_new_event_row: false,
+            show_new_bus_row: false,
+            show_new_snapshot_row: false,
             new_event_name: String::new(),
             new_bus_name: String::new(),
             new_snapshot_name: String::new(),
@@ -585,20 +591,17 @@ impl EditorState {
         }
     }
 
-    fn create_event_in_selected_bank(&mut self) {
+    fn create_event_in_selected_bank(&mut self) -> bool {
         let event_name = self.new_event_name.trim().to_owned();
         if event_name.is_empty() {
-            return;
+            return false;
         }
 
         let Some(project) = self.loaded_project.as_mut() else {
-            return;
-        };
-        let Some(bank_name) = self.selected_bank_name.clone() else {
-            return;
+            return false;
         };
         let Some(first_asset) = project.assets.first() else {
-            return;
+            return false;
         };
 
         let sampler_id = NodeId::new();
@@ -622,58 +625,46 @@ impl EditorState {
         let event_id = event.id;
         project.events.push(event);
         self.new_event_name.clear();
-        self.add_event_to_selected_bank(event_id);
         self.selected_item = Some(SelectedItem::Event(event_id));
-        self.status_message = self.tr(TextTemplate::CreatedEventInBank {
+        self.on_project_changed();
+        self.status_message = self.tr(TextTemplate::CreatedEvent {
             event_name: event_name.clone(),
-            bank_name: bank_name.clone(),
         });
-        self.push_info_log(self.tr(TextTemplate::CreatedEventInBank {
-            event_name,
-            bank_name,
-        }));
+        self.push_info_log(self.tr(TextTemplate::CreatedEvent { event_name }));
+        true
     }
 
-    fn create_bus_in_selected_bank(&mut self) {
+    fn create_bus_in_selected_bank(&mut self) -> bool {
         let bus_name = self.new_bus_name.trim().to_owned();
         if bus_name.is_empty() {
-            return;
+            return false;
         }
 
         let Some(project) = self.loaded_project.as_mut() else {
-            return;
-        };
-        let Some(bank_name) = self.selected_bank_name.clone() else {
-            return;
+            return false;
         };
 
         let bus = Bus::new(bus_name.clone());
         let bus_id = bus.id;
         project.buses.push(bus);
         self.new_bus_name.clear();
-        self.add_bus_to_selected_bank(bus_id);
         self.selected_item = Some(SelectedItem::Bus(bus_id));
-        self.status_message = self.tr(TextTemplate::CreatedBusInBank {
+        self.on_project_changed();
+        self.status_message = self.tr(TextTemplate::CreatedBus {
             bus_name: bus_name.clone(),
-            bank_name: bank_name.clone(),
         });
-        self.push_info_log(self.tr(TextTemplate::CreatedBusInBank {
-            bus_name,
-            bank_name,
-        }));
+        self.push_info_log(self.tr(TextTemplate::CreatedBus { bus_name }));
+        true
     }
 
-    fn create_snapshot_in_selected_bank(&mut self) {
+    fn create_snapshot_in_selected_bank(&mut self) -> bool {
         let snapshot_name = self.new_snapshot_name.trim().to_owned();
         if snapshot_name.is_empty() {
-            return;
+            return false;
         }
 
         let Some(project) = self.loaded_project.as_mut() else {
-            return;
-        };
-        let Some(bank_name) = self.selected_bank_name.clone() else {
-            return;
+            return false;
         };
 
         let snapshot = Snapshot {
@@ -686,16 +677,13 @@ impl EditorState {
         let snapshot_id = snapshot.id;
         project.snapshots.push(snapshot);
         self.new_snapshot_name.clear();
-        self.add_snapshot_to_selected_bank(snapshot_id);
         self.selected_item = Some(SelectedItem::Snapshot(snapshot_id));
-        self.status_message = self.tr(TextTemplate::CreatedSnapshotInBank {
+        self.on_project_changed();
+        self.status_message = self.tr(TextTemplate::CreatedSnapshot {
             snapshot_name: snapshot_name.clone(),
-            bank_name: bank_name.clone(),
         });
-        self.push_info_log(self.tr(TextTemplate::CreatedSnapshotInBank {
-            snapshot_name,
-            bank_name,
-        }));
+        self.push_info_log(self.tr(TextTemplate::CreatedSnapshot { snapshot_name }));
+        true
     }
 
     fn create_asset_in_project(&mut self) {

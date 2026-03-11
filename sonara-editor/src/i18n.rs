@@ -41,9 +41,6 @@ pub enum TextKey {
     QuickActions,
     CreateObjects,
     NewAssetPath,
-    NewEventName,
-    NewBusName,
-    NewSnapshotName,
     NewParameterName,
     NewParameterVariants,
     CreateAsset,
@@ -138,6 +135,8 @@ pub enum TextKey {
     NoSnapshots,
     Log,
     Clear,
+    Confirm,
+    Cancel,
     NoLogs,
     FontLoaded,
     Ready,
@@ -222,17 +221,14 @@ pub enum TextTemplate {
         event_name: String,
         bank_name: String,
     },
-    CreatedEventInBank {
+    CreatedEvent {
         event_name: String,
-        bank_name: String,
     },
-    CreatedBusInBank {
+    CreatedBus {
         bus_name: String,
-        bank_name: String,
     },
-    CreatedSnapshotInBank {
+    CreatedSnapshot {
         snapshot_name: String,
-        bank_name: String,
     },
     CreatedParameter {
         parameter_name: String,
@@ -279,16 +275,13 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::QuickActions => "快捷操作",
         TextKey::CreateObjects => "创建对象",
         TextKey::NewAssetPath => "新资源路径",
-        TextKey::NewEventName => "新Event名称",
-        TextKey::NewBusName => "新Bus名称",
-        TextKey::NewSnapshotName => "新Snapshot名称",
         TextKey::NewParameterName => "新参数名称",
         TextKey::NewParameterVariants => "枚举值",
-        TextKey::CreateAsset => "导入Asset",
-        TextKey::CreateEvent => "创建Event",
-        TextKey::CreateBus => "创建Bus",
-        TextKey::CreateSnapshot => "创建Snapshot",
-        TextKey::CreateEnumParameter => "创建枚举参数",
+        TextKey::CreateAsset => "新建",
+        TextKey::CreateEvent => "新建",
+        TextKey::CreateBus => "新建",
+        TextKey::CreateSnapshot => "新建",
+        TextKey::CreateEnumParameter => "新建",
         TextKey::CreateEventNeedsAsset => "创建Event至少需要一个资源",
         TextKey::CreateParameterNeedsVariants => "创建参数至少需要一个枚举值",
         TextKey::LoadProjectFirst => "请先加载一个项目文件",
@@ -344,8 +337,8 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::AvailableBuses => "可加入的总线",
         TextKey::CurrentBankSnapshots => "当前Bank中的快照",
         TextKey::AvailableSnapshots => "可加入的快照",
-        TextKey::AddToBank => "加入Bank",
-        TextKey::RemoveFromBank => "移除",
+        TextKey::AddToBank => "加入",
+        TextKey::RemoveFromBank => "移出",
         TextKey::DeleteFromProject => "删除",
         TextKey::NoAvailableEvents => "没有可加入的事件",
         TextKey::NoAvailableBuses => "没有可加入的总线",
@@ -376,6 +369,8 @@ fn text_zh_cn(key: TextKey) -> &'static str {
         TextKey::NoSnapshots => "无快照",
         TextKey::Log => "日志",
         TextKey::Clear => "清空",
+        TextKey::Confirm => "确定",
+        TextKey::Cancel => "取消",
         TextKey::NoLogs => "暂无日志",
         TextKey::FontLoaded => "中文字体加载成功",
         TextKey::Ready => "Ready",
@@ -421,16 +416,13 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::QuickActions => "Quick Actions",
         TextKey::CreateObjects => "Create Objects",
         TextKey::NewAssetPath => "New Asset Path",
-        TextKey::NewEventName => "New Event Name",
-        TextKey::NewBusName => "New Bus Name",
-        TextKey::NewSnapshotName => "New Snapshot Name",
         TextKey::NewParameterName => "New Parameter Name",
         TextKey::NewParameterVariants => "Variants",
-        TextKey::CreateAsset => "Import Asset",
-        TextKey::CreateEvent => "Create Event",
-        TextKey::CreateBus => "Create Bus",
-        TextKey::CreateSnapshot => "Create Snapshot",
-        TextKey::CreateEnumParameter => "Create Enum Parameter",
+        TextKey::CreateAsset => "New",
+        TextKey::CreateEvent => "New",
+        TextKey::CreateBus => "New",
+        TextKey::CreateSnapshot => "New",
+        TextKey::CreateEnumParameter => "New",
         TextKey::CreateEventNeedsAsset => "Creating an event requires at least one asset",
         TextKey::CreateParameterNeedsVariants => {
             "Creating a parameter requires at least one enum variant"
@@ -488,7 +480,7 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::AvailableBuses => "Available Buses",
         TextKey::CurrentBankSnapshots => "Snapshots in Current Bank",
         TextKey::AvailableSnapshots => "Available Snapshots",
-        TextKey::AddToBank => "Add to Bank",
+        TextKey::AddToBank => "Add",
         TextKey::RemoveFromBank => "Remove",
         TextKey::DeleteFromProject => "Delete",
         TextKey::NoAvailableEvents => "No available events to add.",
@@ -524,6 +516,8 @@ fn text_en_us(key: TextKey) -> &'static str {
         TextKey::NoSnapshots => "No snapshots.",
         TextKey::Log => "Log",
         TextKey::Clear => "Clear",
+        TextKey::Confirm => "Confirm",
+        TextKey::Cancel => "Cancel",
         TextKey::NoLogs => "No logs yet.",
         TextKey::FontLoaded => "Chinese font loaded successfully",
         TextKey::Ready => "Ready",
@@ -592,20 +586,11 @@ fn template_zh_cn(template: TextTemplate) -> String {
             event_name,
             bank_name,
         } => format!("已将事件{event_name}从Bank {bank_name}移除"),
-        TextTemplate::CreatedEventInBank {
-            event_name,
-            bank_name,
-        } => format!("已在Bank {bank_name}中创建Event {event_name}"),
-        TextTemplate::CreatedBusInBank {
-            bus_name,
-            bank_name,
-        } => {
-            format!("已在Bank {bank_name}中创建Bus {bus_name}")
+        TextTemplate::CreatedEvent { event_name } => format!("已创建Event {event_name}"),
+        TextTemplate::CreatedBus { bus_name } => format!("已创建Bus {bus_name}"),
+        TextTemplate::CreatedSnapshot { snapshot_name } => {
+            format!("已创建Snapshot {snapshot_name}")
         }
-        TextTemplate::CreatedSnapshotInBank {
-            snapshot_name,
-            bank_name,
-        } => format!("已在Bank {bank_name}中创建Snapshot {snapshot_name}"),
         TextTemplate::CreatedParameter { parameter_name } => {
             format!("已创建枚举参数 {parameter_name}")
         }
@@ -659,20 +644,11 @@ fn template_en_us(template: TextTemplate) -> String {
             event_name,
             bank_name,
         } => format!("Removed event {event_name} from bank {bank_name}"),
-        TextTemplate::CreatedEventInBank {
-            event_name,
-            bank_name,
-        } => format!("Created event {event_name} in bank {bank_name}"),
-        TextTemplate::CreatedBusInBank {
-            bus_name,
-            bank_name,
-        } => {
-            format!("Created bus {bus_name} in bank {bank_name}")
+        TextTemplate::CreatedEvent { event_name } => format!("Created event {event_name}"),
+        TextTemplate::CreatedBus { bus_name } => format!("Created bus {bus_name}"),
+        TextTemplate::CreatedSnapshot { snapshot_name } => {
+            format!("Created snapshot {snapshot_name}")
         }
-        TextTemplate::CreatedSnapshotInBank {
-            snapshot_name,
-            bank_name,
-        } => format!("Created snapshot {snapshot_name} in bank {bank_name}"),
         TextTemplate::CreatedParameter { parameter_name } => {
             format!("Created enum parameter {parameter_name}")
         }
