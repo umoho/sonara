@@ -3,6 +3,8 @@
 use std::{
     collections::{HashMap, HashSet},
     num::{NonZeroU32, NonZeroUsize},
+    sync::mpsc,
+    thread,
 };
 
 use firewheel::{
@@ -13,7 +15,7 @@ use firewheel::{
     sample_resource::{InterleavedResourceF32, SampleResource},
 };
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
-use firewheel_symphonium::load_audio_file;
+use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Event, EventId, ParameterId,
@@ -67,7 +69,11 @@ pub struct FirewheelBackend {
     context: FirewheelContext,
     sampler_pool: SamplerPoolVolumePan,
     known_bank_assets: HashMap<Uuid, BankAsset>,
+    loading_streaming_assets: HashSet<Uuid>,
+    pending_playbacks: HashMap<EventInstanceId, PlaybackPlan>,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
+    streaming_asset_tx: mpsc::Sender<StreamingAssetLoadResult>,
+    streaming_asset_rx: mpsc::Receiver<StreamingAssetLoadResult>,
     instance_workers: HashMap<EventInstanceId, Vec<WorkerID>>,
     worker_instances: HashMap<WorkerID, EventInstanceId>,
     command_buffer: RuntimeCommandBuffer,
@@ -93,13 +99,18 @@ impl FirewheelBackend {
         context
             .update()
             .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
+        let (streaming_asset_tx, streaming_asset_rx) = mpsc::channel();
 
         Ok(Self {
             runtime,
             context,
             sampler_pool,
             known_bank_assets: HashMap::new(),
+            loading_streaming_assets: HashSet::new(),
+            pending_playbacks: HashMap::new(),
             sample_resources: HashMap::new(),
+            streaming_asset_tx,
+            streaming_asset_rx,
             instance_workers: HashMap::new(),
             worker_instances: HashMap::new(),
             command_buffer: RuntimeCommandBuffer::new(),
@@ -167,6 +178,8 @@ impl FirewheelBackend {
 
             if should_preload_bank_asset(asset, &resident_media, &streaming_media) {
                 self.decode_bank_asset(asset)?;
+            } else {
+                self.prewarm_streaming_bank_asset(asset);
             }
         }
 
@@ -182,19 +195,8 @@ impl FirewheelBackend {
     }
 
     fn decode_bank_asset(&mut self, asset: &BankAsset) -> Result<(), FirewheelBackendError> {
-        let mut loader = symphonium::SymphoniumLoader::new();
-        let target_sample_rate = asset
-            .import_settings
-            .target_sample_rate
-            .and_then(NonZeroU32::new);
-        let decoded = load_audio_file(
-            &mut loader,
-            asset.source_path.as_std_path(),
-            target_sample_rate,
-            symphonium::ResampleQuality::default(),
-        )
-        .map_err(|error| FirewheelBackendError::DecodeAsset(asset.id, error.to_string()))?;
-
+        let decoded = load_bank_asset_resource(asset)
+            .map_err(|error| FirewheelBackendError::DecodeAsset(asset.id, error))?;
         self.register_sample_resource(asset.id, decoded.into());
         Ok(())
     }
@@ -382,6 +384,7 @@ impl FirewheelBackend {
         }
 
         self.runtime.stop(instance_id, fade)?;
+        self.pending_playbacks.remove(&instance_id);
 
         let worker_ids = self
             .instance_workers
@@ -401,6 +404,8 @@ impl FirewheelBackend {
         self.context
             .update()
             .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
+        self.drain_ready_streaming_assets();
+        self.start_ready_pending_playbacks()?;
         let poll_result = self.sampler_pool.poll(&self.context);
         for worker_id in poll_result.finished_workers {
             self.finish_worker(worker_id);
@@ -439,6 +444,12 @@ impl FirewheelBackend {
         instance_id: EventInstanceId,
         plan: &PlaybackPlan,
     ) -> Result<(), FirewheelBackendError> {
+        if !self.is_playback_plan_ready(plan) {
+            self.pending_playbacks.insert(instance_id, plan.clone());
+            return Ok(());
+        }
+
+        self.pending_playbacks.remove(&instance_id);
         self.instance_workers.remove(&instance_id);
         let bus_volume = self.runtime.active_bus_volume(instance_id).unwrap_or(1.0);
 
@@ -485,8 +496,10 @@ impl FirewheelBackend {
     /// 确保资源在真正播放前已经准备成 Firewheel 可消费的 sample resource。
     ///
     /// resident 媒体会在 bank 加载阶段提前完成,
-    /// streaming 媒体则会在首次真正命中播放时按需解码。
+    /// streaming 媒体优先等待后台预热结果, 只有兜底时才同步解码。
     fn ensure_bank_asset_ready(&mut self, asset_id: Uuid) -> Result<(), FirewheelBackendError> {
+        self.drain_ready_streaming_assets();
+
         if self.sample_resources.contains_key(&asset_id) {
             return Ok(());
         }
@@ -496,7 +509,87 @@ impl FirewheelBackend {
             .get(&asset_id)
             .cloned()
             .ok_or(FirewheelBackendError::AssetNotRegistered(asset_id))?;
+
+        if self.loading_streaming_assets.contains(&asset.id) {
+            return Ok(());
+        }
+
         self.decode_bank_asset(&asset)
+    }
+
+    /// 把 streaming 资源的解码工作尽早移到后台线程里做, 避免第一次切状态时再卡主线程。
+    fn prewarm_streaming_bank_asset(&mut self, asset: &BankAsset) {
+        if self.sample_resources.contains_key(&asset.id)
+            || !self.loading_streaming_assets.insert(asset.id)
+        {
+            return;
+        }
+
+        let tx = self.streaming_asset_tx.clone();
+        let asset = asset.clone();
+        thread::spawn(move || {
+            let result = load_bank_asset_resource(&asset);
+            let _ = tx.send(StreamingAssetLoadResult {
+                asset_id: asset.id,
+                result,
+            });
+        });
+    }
+
+    /// 把后台已经完成的 streaming 资源注册回主线程 backend 状态。
+    fn drain_ready_streaming_assets(&mut self) {
+        while let Ok(message) = self.streaming_asset_rx.try_recv() {
+            self.loading_streaming_assets.remove(&message.asset_id);
+
+            if let Ok(decoded) = message.result {
+                self.register_sample_resource(message.asset_id, decoded.into());
+            }
+        }
+    }
+
+    fn is_playback_plan_ready(&mut self, plan: &PlaybackPlan) -> bool {
+        for asset_id in &plan.asset_ids {
+            if self.sample_resources.contains_key(asset_id) {
+                continue;
+            }
+
+            let Some(asset) = self.known_bank_assets.get(asset_id).cloned() else {
+                return false;
+            };
+
+            if asset.streaming == sonara_model::StreamingMode::Streaming {
+                self.prewarm_streaming_bank_asset(&asset);
+                return false;
+            }
+
+            return false;
+        }
+
+        true
+    }
+
+    /// 后台资源准备好之后, 在常规 update 阶段把之前挂起的实例真正启动。
+    fn start_ready_pending_playbacks(&mut self) -> Result<(), FirewheelBackendError> {
+        let pending_playbacks: Vec<_> = self
+            .pending_playbacks
+            .iter()
+            .map(|(instance_id, plan)| (*instance_id, plan.clone()))
+            .collect();
+        let ready_instance_ids: Vec<_> = pending_playbacks
+            .into_iter()
+            .filter_map(|(instance_id, plan)| {
+                self.is_playback_plan_ready(&plan).then_some(instance_id)
+            })
+            .collect();
+
+        for instance_id in ready_instance_ids {
+            let Some(plan) = self.pending_playbacks.remove(&instance_id) else {
+                continue;
+            };
+            self.playback_plan(instance_id, &plan)?;
+        }
+
+        Ok(())
     }
 
     fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
@@ -538,4 +631,24 @@ fn should_preload_bank_asset(
     }
 
     asset.streaming != sonara_model::StreamingMode::Streaming
+}
+
+struct StreamingAssetLoadResult {
+    asset_id: Uuid,
+    result: Result<DecodedAudio, String>,
+}
+
+fn load_bank_asset_resource(asset: &BankAsset) -> Result<DecodedAudio, String> {
+    let mut loader = symphonium::SymphoniumLoader::new();
+    let target_sample_rate = asset
+        .import_settings
+        .target_sample_rate
+        .and_then(NonZeroU32::new);
+    load_audio_file(
+        &mut loader,
+        asset.source_path.as_std_path(),
+        target_sample_rate,
+        symphonium::ResampleQuality::default(),
+    )
+    .map_err(|error| error.to_string())
 }
