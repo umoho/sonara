@@ -108,6 +108,7 @@ pub struct EditorState {
     pub recent_projects: Vec<String>,
     pub loaded_project: Option<AuthoringProject>,
     pub selected_bank_name: Option<String>,
+    pub selected_item: Option<SelectedItem>,
     pub validation_report: ValidationReport,
     pub last_export: Option<ExportReport>,
     pub has_unsaved_changes: bool,
@@ -128,6 +129,13 @@ pub struct EditorState {
     pub logs: Vec<LogEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectedItem {
+    Event(sonara_model::EventId),
+    Bus(sonara_model::BusId),
+    Snapshot(sonara_model::SnapshotId),
+}
+
 impl Default for EditorState {
     fn default() -> Self {
         Self {
@@ -137,6 +145,7 @@ impl Default for EditorState {
             recent_projects: Vec::new(),
             loaded_project: None,
             selected_bank_name: None,
+            selected_item: None,
             validation_report: ValidationReport::default(),
             last_export: None,
             has_unsaved_changes: false,
@@ -513,128 +522,7 @@ impl EditorState {
                     bank.snapshots.len()
                 ));
                 ui.separator();
-                self.draw_event_list(ui, project, bank);
-                ui.separator();
-                self.draw_bus_list(ui, project, bank);
-                ui.separator();
-                self.draw_snapshot_list(ui, project, bank);
-                ui.separator();
-                self.draw_validation_report(ui);
-            });
-    }
-
-    fn draw_event_list(
-        &self,
-        ui: &mut egui::Ui,
-        project: &AuthoringProject,
-        bank: &BankDefinition,
-    ) {
-        ui.label(RichText::new(self.tx(TextKey::Events)).strong());
-        if bank.events.is_empty() {
-            ui.label(self.tx(TextKey::NoEvents));
-            return;
-        }
-
-        egui::ScrollArea::vertical()
-            .id_salt("event_list")
-            .max_height(260.0)
-            .show(ui, |ui| {
-                for event_id in &bank.events {
-                    if let Some(event) = project.events.iter().find(|event| event.id == *event_id) {
-                        let asset_count = collect_event_asset_ids(event).len();
-                        let summary = format!(
-                            "{} | {} | {}",
-                            event.name,
-                            format_event_kind(event.kind),
-                            format_spatial_mode(event.spatial)
-                        );
-                        ui.collapsing(summary, |ui| {
-                            ui.label(format!("ID: {}", format_event_id(event)));
-                            ui.label(format!(
-                                "{}: {}",
-                                self.tx(TextKey::Kind),
-                                format_event_kind(event.kind)
-                            ));
-                            ui.label(format!(
-                                "{}: {}",
-                                self.tx(TextKey::Spatial),
-                                format_spatial_mode(event.spatial)
-                            ));
-                            ui.label(format!(
-                                "{}: {}",
-                                self.tx(TextKey::NodeCount),
-                                event.root.nodes.len()
-                            ));
-                            ui.label(format!(
-                                "{}: {}",
-                                self.tx(TextKey::ResolvedAssetCount),
-                                asset_count
-                            ));
-                        });
-                    } else {
-                        ui.colored_label(
-                            Color32::YELLOW,
-                            format!("{}: {}", self.tx(TextKey::MissingEvent), event_id.0),
-                        );
-                    }
-                }
-            });
-    }
-
-    fn draw_bus_list(&self, ui: &mut egui::Ui, project: &AuthoringProject, bank: &BankDefinition) {
-        ui.label(RichText::new(self.tx(TextKey::Buses)).strong());
-        if bank.buses.is_empty() {
-            ui.label(self.tx(TextKey::NoBuses));
-            return;
-        }
-
-        egui::ScrollArea::vertical()
-            .id_salt("bus_list")
-            .max_height(140.0)
-            .show(ui, |ui| {
-                for bus_id in &bank.buses {
-                    if let Some(bus) = project.buses.iter().find(|bus| bus.id == *bus_id) {
-                        ui.label(format!("{} | {}", bus.name, bus.id.0));
-                    } else {
-                        ui.colored_label(
-                            Color32::YELLOW,
-                            format!("{}: {}", self.tx(TextKey::MissingBus), bus_id.0),
-                        );
-                    }
-                }
-            });
-    }
-
-    fn draw_snapshot_list(
-        &self,
-        ui: &mut egui::Ui,
-        project: &AuthoringProject,
-        bank: &BankDefinition,
-    ) {
-        ui.label(RichText::new(self.tx(TextKey::Snapshots)).strong());
-        if bank.snapshots.is_empty() {
-            ui.label(self.tx(TextKey::NoSnapshots));
-            return;
-        }
-
-        egui::ScrollArea::vertical()
-            .id_salt("snapshot_list")
-            .max_height(140.0)
-            .show(ui, |ui| {
-                for snapshot_id in &bank.snapshots {
-                    if let Some(snapshot) = project
-                        .snapshots
-                        .iter()
-                        .find(|snapshot| snapshot.id == *snapshot_id)
-                    {
-                        ui.label(format!("{} | {}", snapshot.name, snapshot.id.0));
-                    } else {
-                        ui.colored_label(
-                            Color32::YELLOW,
-                            format!("{}: {}", self.tx(TextKey::MissingSnapshot), snapshot_id.0),
-                        );
-                    }
-                }
+                self.draw_selected_item_inspector(ui);
             });
     }
 
@@ -686,6 +574,7 @@ impl EditorState {
     /// 选择当前项目里的一个 bank。
     pub fn select_bank(&mut self, bank_name: &str) {
         self.selected_bank_name = Some(bank_name.to_owned());
+        self.selected_item = None;
         self.export_path = self.suggest_export_path(bank_name);
         self.refresh_validation();
         self.status_message = self.tr(TextTemplate::SelectBank {
@@ -941,7 +830,10 @@ impl EditorState {
             } else {
                 for (event_name, event_id) in &current_bank_events {
                     ui.horizontal(|ui| {
-                        ui.label(event_name);
+                        let selected = self.selected_item == Some(SelectedItem::Event(*event_id));
+                        if ui.selectable_label(selected, event_name).clicked() {
+                            self.selected_item = Some(SelectedItem::Event(*event_id));
+                        }
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             event_to_remove = Some((event_name.clone(), *event_id));
                         }
@@ -973,7 +865,10 @@ impl EditorState {
             } else {
                 for (bus_name, bus_id) in &current_bank_buses {
                     ui.horizontal(|ui| {
-                        ui.label(bus_name);
+                        let selected = self.selected_item == Some(SelectedItem::Bus(*bus_id));
+                        if ui.selectable_label(selected, bus_name).clicked() {
+                            self.selected_item = Some(SelectedItem::Bus(*bus_id));
+                        }
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             bus_to_remove = Some(*bus_id);
                         }
@@ -1005,7 +900,11 @@ impl EditorState {
             } else {
                 for (snapshot_name, snapshot_id) in &current_bank_snapshots {
                     ui.horizontal(|ui| {
-                        ui.label(snapshot_name);
+                        let selected =
+                            self.selected_item == Some(SelectedItem::Snapshot(*snapshot_id));
+                        if ui.selectable_label(selected, snapshot_name).clicked() {
+                            self.selected_item = Some(SelectedItem::Snapshot(*snapshot_id));
+                        }
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             snapshot_to_remove = Some(*snapshot_id);
                         }
@@ -1385,6 +1284,186 @@ impl EditorState {
         });
     }
 
+    fn draw_selected_item_inspector(&mut self, ui: &mut egui::Ui) {
+        if self.loaded_project.is_none() {
+            ui.label(self.tx(TextKey::NoProjectLoadedShort));
+            return;
+        }
+
+        let node_count_label = self.tx(TextKey::NodeCount);
+        let resolved_asset_count_label = self.tx(TextKey::ResolvedAssetCount);
+        let default_volume_label = self.tx(TextKey::DefaultVolume);
+        let fade_in_label = self.tx(TextKey::FadeInSeconds);
+        let fade_out_label = self.tx(TextKey::FadeOutSeconds);
+        let events_label = self.tx(TextKey::Events);
+        let buses_label = self.tx(TextKey::Buses);
+        let snapshots_label = self.tx(TextKey::Snapshots);
+        let kind_label = self.tx(TextKey::Kind);
+        let spatial_label = self.tx(TextKey::Spatial);
+        let mut changed = false;
+
+        match self.selected_item {
+            Some(SelectedItem::Event(event_id)) => {
+                let Some(project) = self.loaded_project.as_mut() else {
+                    return;
+                };
+                let Some(event) = project.events.iter_mut().find(|event| event.id == event_id)
+                else {
+                    ui.label(self.tx(TextKey::NoSelection));
+                    return;
+                };
+                ui.label(RichText::new(events_label).strong());
+                ui.label(format!("ID: {}", event.id.0));
+                let mut event_name = event.name.to_string();
+                changed |= ui
+                    .add(
+                        TextEdit::singleline(&mut event_name)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("event.name"),
+                    )
+                    .changed();
+                if event.name.as_str() != event_name {
+                    event.name = event_name.into();
+                }
+                ui.label(kind_label);
+                egui::ComboBox::from_id_salt(("event_kind", event.id.0))
+                    .selected_text(format_event_kind_display(self.locale, event.kind))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut event.kind,
+                                EventKind::OneShot,
+                                format_event_kind_display(self.locale, EventKind::OneShot),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut event.kind,
+                                EventKind::Persistent,
+                                format_event_kind_display(self.locale, EventKind::Persistent),
+                            )
+                            .changed();
+                    });
+                ui.label(spatial_label);
+                egui::ComboBox::from_id_salt(("event_spatial", event.id.0))
+                    .selected_text(format_spatial_mode_display(self.locale, event.spatial))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut event.spatial,
+                                SpatialMode::None,
+                                format_spatial_mode_display(self.locale, SpatialMode::None),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut event.spatial,
+                                SpatialMode::TwoD,
+                                format_spatial_mode_display(self.locale, SpatialMode::TwoD),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut event.spatial,
+                                SpatialMode::ThreeD,
+                                format_spatial_mode_display(self.locale, SpatialMode::ThreeD),
+                            )
+                            .changed();
+                    });
+                ui.label(format!("{}: {}", node_count_label, event.root.nodes.len()));
+                ui.label(format!(
+                    "{}: {}",
+                    resolved_asset_count_label,
+                    collect_event_asset_ids(event).len()
+                ));
+            }
+            Some(SelectedItem::Bus(bus_id)) => {
+                let Some(project) = self.loaded_project.as_mut() else {
+                    return;
+                };
+                let Some(bus) = project.buses.iter_mut().find(|bus| bus.id == bus_id) else {
+                    ui.label(self.tx(TextKey::NoSelection));
+                    return;
+                };
+                ui.label(RichText::new(buses_label).strong());
+                ui.label(format!("ID: {}", bus.id.0));
+                let mut bus_name = bus.name.to_string();
+                changed |= ui
+                    .add(
+                        TextEdit::singleline(&mut bus_name)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("bus.name"),
+                    )
+                    .changed();
+                if bus.name.as_str() != bus_name {
+                    bus.name = bus_name.into();
+                }
+                changed |= ui
+                    .add(
+                        egui::Slider::new(&mut bus.default_volume, 0.0..=2.0)
+                            .text(default_volume_label),
+                    )
+                    .changed();
+            }
+            Some(SelectedItem::Snapshot(snapshot_id)) => {
+                let Some(project) = self.loaded_project.as_mut() else {
+                    return;
+                };
+                let Some(snapshot) = project
+                    .snapshots
+                    .iter_mut()
+                    .find(|snapshot| snapshot.id == snapshot_id)
+                else {
+                    ui.label(self.tx(TextKey::NoSelection));
+                    return;
+                };
+                ui.label(RichText::new(snapshots_label).strong());
+                ui.label(format!("ID: {}", snapshot.id.0));
+                let mut snapshot_name = snapshot.name.to_string();
+                changed |= ui
+                    .add(
+                        TextEdit::singleline(&mut snapshot_name)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("snapshot.name"),
+                    )
+                    .changed();
+                if snapshot.name.as_str() != snapshot_name {
+                    snapshot.name = snapshot_name.into();
+                }
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut snapshot.fade_in_seconds)
+                            .speed(0.05)
+                            .prefix(format!("{}: ", fade_in_label)),
+                    )
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut snapshot.fade_out_seconds)
+                            .speed(0.05)
+                            .prefix(format!("{}: ", fade_out_label)),
+                    )
+                    .changed();
+                ui.label(format!("Targets: {}", snapshot.targets.len()));
+            }
+            None => {
+                ui.label(self.tx(TextKey::NoSelection));
+                ui.separator();
+                self.draw_validation_report(ui);
+            }
+        }
+
+        if changed {
+            self.on_project_changed();
+        }
+    }
+
+    fn on_project_changed(&mut self) {
+        self.has_unsaved_changes = true;
+        self.last_export = None;
+        self.refresh_validation();
+    }
+
     fn draw_export_report(&self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.label(RichText::new(self.tx(TextKey::LastExport)).strong());
@@ -1650,10 +1729,6 @@ impl EditorState {
     }
 }
 
-fn format_event_id(event: &Event) -> String {
-    event.id.0.to_string()
-}
-
 fn render_project_error(error: &ProjectFileError) -> String {
     error.to_string()
 }
@@ -1683,11 +1758,28 @@ fn format_event_kind(kind: EventKind) -> &'static str {
     }
 }
 
-fn format_spatial_mode(spatial: SpatialMode) -> &'static str {
-    match spatial {
-        SpatialMode::None => "None",
-        SpatialMode::TwoD => "TwoD",
-        SpatialMode::ThreeD => "ThreeD",
+fn format_event_kind_display(locale: EditorLocale, kind: EventKind) -> &'static str {
+    match locale {
+        EditorLocale::ZhCn => match kind {
+            EventKind::OneShot => "单次",
+            EventKind::Persistent => "常驻",
+        },
+        EditorLocale::EnUs => format_event_kind(kind),
+    }
+}
+
+fn format_spatial_mode_display(locale: EditorLocale, spatial: SpatialMode) -> &'static str {
+    match locale {
+        EditorLocale::ZhCn => match spatial {
+            SpatialMode::None => "无",
+            SpatialMode::TwoD => "2D",
+            SpatialMode::ThreeD => "3D",
+        },
+        EditorLocale::EnUs => match spatial {
+            SpatialMode::None => "None",
+            SpatialMode::TwoD => "2D",
+            SpatialMode::ThreeD => "3D",
+        },
     }
 }
 
