@@ -25,6 +25,8 @@ use sonara_model::{
     EventContentRoot, EventKind, NodeId, NodeRef, Parameter, ParameterScope, ProjectFileError,
     SamplerNode, Snapshot, SpatialMode,
 };
+use sonara_model::{BusId, EventId, ParameterId, SnapshotId};
+use uuid::Uuid;
 
 /// 默认打开的 demo project 路径。
 pub const DEFAULT_PROJECT_PATH: &str = "sonara-app/assets/demo/project.json";
@@ -737,6 +739,113 @@ impl EditorState {
             asset_name: asset_name.clone(),
         });
         self.push_info_log(self.tr(TextTemplate::CreatedAsset { asset_name }));
+    }
+
+    fn delete_event_from_project(&mut self, event_id: EventId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let original_len = project.events.len();
+        project.events.retain(|event| event.id != event_id);
+        if project.events.len() == original_len {
+            return;
+        }
+
+        for bank in &mut project.banks {
+            bank.events.retain(|id| *id != event_id);
+        }
+
+        if self.selected_item == Some(SelectedItem::Event(event_id)) {
+            self.selected_item = None;
+        }
+        self.on_project_changed();
+    }
+
+    fn delete_bus_from_project(&mut self, bus_id: BusId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let original_len = project.buses.len();
+        project.buses.retain(|bus| bus.id != bus_id);
+        if project.buses.len() == original_len {
+            return;
+        }
+
+        for bank in &mut project.banks {
+            bank.buses.retain(|id| *id != bus_id);
+        }
+        for event in &mut project.events {
+            if event.default_bus == Some(bus_id) {
+                event.default_bus = None;
+            }
+        }
+
+        if self.selected_item == Some(SelectedItem::Bus(bus_id)) {
+            self.selected_item = None;
+        }
+        self.on_project_changed();
+    }
+
+    fn delete_snapshot_from_project(&mut self, snapshot_id: SnapshotId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let original_len = project.snapshots.len();
+        project
+            .snapshots
+            .retain(|snapshot| snapshot.id != snapshot_id);
+        if project.snapshots.len() == original_len {
+            return;
+        }
+
+        for bank in &mut project.banks {
+            bank.snapshots.retain(|id| *id != snapshot_id);
+        }
+
+        if self.selected_item == Some(SelectedItem::Snapshot(snapshot_id)) {
+            self.selected_item = None;
+        }
+        self.on_project_changed();
+    }
+
+    fn delete_parameter_from_project(&mut self, parameter_id: ParameterId) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let original_len = project.parameters.len();
+        project
+            .parameters
+            .retain(|parameter| parameter.id() != parameter_id);
+        if project.parameters.len() == original_len {
+            return;
+        }
+
+        for event in &mut project.events {
+            event.default_parameters.retain(|id| *id != parameter_id);
+        }
+
+        if self.selected_item == Some(SelectedItem::Parameter(parameter_id)) {
+            self.selected_item = None;
+        }
+        self.on_project_changed();
+    }
+
+    fn delete_asset_from_project(&mut self, asset_id: Uuid) {
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let original_len = project.assets.len();
+        project.assets.retain(|asset| asset.id != asset_id);
+        if project.assets.len() == original_len {
+            return;
+        }
+
+        self.on_project_changed();
     }
 
     fn create_enum_parameter(&mut self) {

@@ -909,7 +909,9 @@ impl EditorState {
             .default_width(560.0)
             .default_height(420.0)
             .show(ctx, |ui| {
-                self.draw_event_bank_editor(ui);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.draw_event_bank_editor(ui);
+                });
             });
         self.show_bank_events_window = open;
     }
@@ -1040,22 +1042,27 @@ impl EditorState {
 
         let mut event_to_remove = None;
         let mut event_to_add = None;
+        let mut event_to_delete = None;
         let mut bus_to_remove = None;
         let mut bus_to_add = None;
+        let mut bus_to_delete = None;
         let mut snapshot_to_remove = None;
         let mut snapshot_to_add = None;
+        let mut snapshot_to_delete = None;
         let can_create_event = !project.assets.is_empty();
         let mut should_create_event = false;
         let mut should_create_bus = false;
         let mut should_create_snapshot = false;
         let enum_parameters = self.enum_parameter_options();
-        let project_assets: Vec<String> = project
+        let project_asset_items: Vec<(String, uuid::Uuid)> = project
             .assets
             .iter()
-            .map(|asset| asset.name.to_string())
+            .map(|asset| (asset.name.to_string(), asset.id))
             .collect();
         let mut should_create_asset = false;
         let mut should_create_parameter = false;
+        let mut asset_to_delete = None;
+        let mut parameter_to_delete = None;
 
         ui.group(|ui| {
             ui.label(RichText::new(self.tx(TextKey::BankContentsEditor)).strong());
@@ -1136,11 +1143,16 @@ impl EditorState {
 
             ui.separator();
             ui.label(RichText::new(self.tx(TextKey::ProjectAssets)).strong());
-            if project_assets.is_empty() {
+            if project_asset_items.is_empty() {
                 ui.label(self.tx(TextKey::NoAssetsInProject));
             } else {
-                for asset_name in &project_assets {
-                    ui.label(asset_name);
+                for (asset_name, asset_id) in &project_asset_items {
+                    ui.horizontal(|ui| {
+                        ui.label(asset_name);
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            asset_to_delete = Some((*asset_id, asset_name.clone()));
+                        }
+                    });
                 }
             }
 
@@ -1161,6 +1173,9 @@ impl EditorState {
                             self.tx(TextKey::VariantCount),
                             parameter.variants.len()
                         ));
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            parameter_to_delete = Some((parameter.id, parameter.name.clone()));
+                        }
                     });
                 }
             }
@@ -1180,6 +1195,9 @@ impl EditorState {
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             event_to_remove = Some((event_name.clone(), *event_id));
                         }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            event_to_delete = Some((event_name.clone(), *event_id));
+                        }
                     });
                 }
             }
@@ -1195,6 +1213,9 @@ impl EditorState {
                         ui.label(event_name);
                         if ui.button(self.tx(TextKey::AddToBank)).clicked() {
                             event_to_add = Some((event_name.clone(), *event_id));
+                        }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            event_to_delete = Some((event_name.clone(), *event_id));
                         }
                     });
                 }
@@ -1215,6 +1236,9 @@ impl EditorState {
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             bus_to_remove = Some(*bus_id);
                         }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            bus_to_delete = Some((*bus_id, bus_name.clone()));
+                        }
                     });
                 }
             }
@@ -1230,6 +1254,9 @@ impl EditorState {
                         ui.label(bus_name);
                         if ui.button(self.tx(TextKey::AddToBank)).clicked() {
                             bus_to_add = Some(*bus_id);
+                        }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            bus_to_delete = Some((*bus_id, bus_name.clone()));
                         }
                     });
                 }
@@ -1251,6 +1278,9 @@ impl EditorState {
                         if ui.button(self.tx(TextKey::RemoveFromBank)).clicked() {
                             snapshot_to_remove = Some(*snapshot_id);
                         }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            snapshot_to_delete = Some((*snapshot_id, snapshot_name.clone()));
+                        }
                     });
                 }
             }
@@ -1266,6 +1296,9 @@ impl EditorState {
                         ui.label(snapshot_name);
                         if ui.button(self.tx(TextKey::AddToBank)).clicked() {
                             snapshot_to_add = Some(*snapshot_id);
+                        }
+                        if ui.button(self.tx(TextKey::DeleteFromProject)).clicked() {
+                            snapshot_to_delete = Some((*snapshot_id, snapshot_name.clone()));
                         }
                     });
                 }
@@ -1284,6 +1317,12 @@ impl EditorState {
             }));
         }
 
+        if let Some((event_name, event_id)) = event_to_delete {
+            self.delete_event_from_project(event_id);
+            self.status_message = format!("已删除事件 {event_name}");
+            self.push_info_log(format!("已删除事件 {event_name}"));
+        }
+
         if let Some((event_name, event_id)) = event_to_add {
             self.add_event_to_selected_bank(event_id);
             self.status_message = self.tr(TextTemplate::AddedEventToBank {
@@ -1300,6 +1339,12 @@ impl EditorState {
             self.remove_bus_from_selected_bank(bus_id);
         }
 
+        if let Some((bus_id, bus_name)) = bus_to_delete {
+            self.delete_bus_from_project(bus_id);
+            self.status_message = format!("已删除Bus {bus_name}");
+            self.push_info_log(format!("已删除Bus {bus_name}"));
+        }
+
         if let Some(bus_id) = bus_to_add {
             self.add_bus_to_selected_bank(bus_id);
         }
@@ -1308,8 +1353,26 @@ impl EditorState {
             self.remove_snapshot_from_selected_bank(snapshot_id);
         }
 
+        if let Some((snapshot_id, snapshot_name)) = snapshot_to_delete {
+            self.delete_snapshot_from_project(snapshot_id);
+            self.status_message = format!("已删除Snapshot {snapshot_name}");
+            self.push_info_log(format!("已删除Snapshot {snapshot_name}"));
+        }
+
         if let Some(snapshot_id) = snapshot_to_add {
             self.add_snapshot_to_selected_bank(snapshot_id);
+        }
+
+        if let Some((asset_id, asset_name)) = asset_to_delete {
+            self.delete_asset_from_project(asset_id);
+            self.status_message = format!("已删除资源 {asset_name}");
+            self.push_info_log(format!("已删除资源 {asset_name}"));
+        }
+
+        if let Some((parameter_id, parameter_name)) = parameter_to_delete {
+            self.delete_parameter_from_project(parameter_id);
+            self.status_message = format!("已删除参数 {parameter_name}");
+            self.push_info_log(format!("已删除参数 {parameter_name}"));
         }
 
         if should_create_event {
