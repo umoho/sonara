@@ -81,29 +81,75 @@ impl Default for EditorApp {
 
 impl eframe::App for EditorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.state.draw_top_bar(ctx);
+        self.state.draw_menu_bar(ctx);
+        self.state.draw_status_bar(ctx);
+        self.state.draw_tool_strip(ctx);
         self.state.draw_left_panel(ctx);
         self.state.draw_right_panel(ctx);
-        self.state.draw_bottom_panel(ctx);
         self.state.draw_center_panel(ctx);
+        self.state.draw_open_project_window(ctx);
+        self.state.draw_export_bank_window(ctx);
+        self.state.draw_bank_events_window(ctx);
+        self.state.draw_diagnostics_window(ctx);
+        self.state.draw_log_window(ctx);
+        self.state.draw_about_window(ctx);
     }
 }
 
 /// 编辑器运行时状态。
 ///
 /// 这一层只维护 UI 所需的瞬时状态, 不把 authoring 模型和 UI 容器硬耦合。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EditorState {
     pub locale: EditorLocale,
     pub project_path: String,
     pub export_path: String,
+    pub recent_projects: Vec<String>,
     pub loaded_project: Option<AuthoringProject>,
     pub selected_bank_name: Option<String>,
     pub validation_report: ValidationReport,
     pub last_export: Option<ExportReport>,
     pub has_unsaved_changes: bool,
+    pub show_project_panel: bool,
+    pub show_inspector_panel: bool,
+    pub show_tool_strip: bool,
+    pub show_status_bar: bool,
+    pub show_open_project_window: bool,
+    pub show_export_bank_window: bool,
+    pub show_bank_events_window: bool,
+    pub show_diagnostics_window: bool,
+    pub show_log_window: bool,
+    pub show_about_window: bool,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            locale: EditorLocale::default(),
+            project_path: String::new(),
+            export_path: String::new(),
+            recent_projects: Vec::new(),
+            loaded_project: None,
+            selected_bank_name: None,
+            validation_report: ValidationReport::default(),
+            last_export: None,
+            has_unsaved_changes: false,
+            show_project_panel: true,
+            show_inspector_panel: true,
+            show_tool_strip: true,
+            show_status_bar: true,
+            show_open_project_window: false,
+            show_export_bank_window: false,
+            show_bank_events_window: false,
+            show_diagnostics_window: false,
+            show_log_window: false,
+            show_about_window: false,
+            status_message: String::new(),
+            logs: Vec::new(),
+        }
+    }
 }
 
 impl EditorState {
@@ -115,64 +161,164 @@ impl EditorState {
         template(self.locale, template_value)
     }
 
-    fn draw_top_bar(&mut self, ctx: &egui::Context) {
+    fn draw_menu_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("project_toolbar")
             .resizable(false)
             .show(ctx, |ui| {
-                let project_path_hint = self.tx(TextKey::ProjectPathHint);
-                let load_project_label = self.tx(TextKey::LoadProject);
-                let language_label = self.tx(TextKey::Language);
+                egui::MenuBar::new().ui(ui, |ui| {
+                    let toggle_project_panel = self.tx(TextKey::ToggleProjectPanel);
+                    let toggle_inspector_panel = self.tx(TextKey::ToggleInspectorPanel);
+                    let toggle_tool_strip = self.tx(TextKey::ToggleToolStrip);
+                    let toggle_status_bar = self.tx(TextKey::ToggleStatusBar);
+                    let window_open_project = self.tx(TextKey::WindowOpenProject);
+                    let window_export_bank = self.tx(TextKey::WindowExportBank);
+                    let window_bank_events = self.tx(TextKey::WindowBankEvents);
+                    let window_diagnostics = self.tx(TextKey::WindowDiagnostics);
+                    let window_log = self.tx(TextKey::WindowLog);
 
-                ui.horizontal(|ui| {
-                    ui.label(self.tx(TextKey::ProjectPath));
-                    let reserved_width = 360.0;
-                    let available_width = (ui.available_width() - reserved_width).max(220.0);
-                    ui.add_sized(
-                        [available_width, ui.spacing().interact_size.y],
-                        TextEdit::singleline(&mut self.project_path).hint_text(project_path_hint),
-                    );
+                    ui.menu_button(self.tx(TextKey::MenuFile), |ui| {
+                        if ui.button(self.tx(TextKey::OpenProject)).clicked() {
+                            self.show_open_project_window = true;
+                            ui.close();
+                        }
+                        if ui.button(self.tx(TextKey::SaveProject)).clicked() {
+                            self.save_project();
+                            ui.close();
+                        }
+                        if ui.button(self.tx(TextKey::WindowExportBank)).clicked() {
+                            self.show_export_bank_window = true;
+                            ui.close();
+                        }
+                    });
 
-                    if ui.button(load_project_label).clicked() {
-                        self.load_project();
-                    }
+                    ui.menu_button(self.tx(TextKey::MenuView), |ui| {
+                        ui.checkbox(&mut self.show_project_panel, toggle_project_panel);
+                        ui.checkbox(&mut self.show_inspector_panel, toggle_inspector_panel);
+                        ui.checkbox(&mut self.show_tool_strip, toggle_tool_strip);
+                        ui.checkbox(&mut self.show_status_bar, toggle_status_bar);
+                    });
 
-                    ui.separator();
-                    ui.label(language_label);
-                    egui::ComboBox::from_id_salt("editor_locale")
-                        .selected_text(self.locale.display_name())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.locale,
-                                EditorLocale::ZhCn,
-                                EditorLocale::ZhCn.display_name(),
-                            );
-                            ui.selectable_value(
-                                &mut self.locale,
-                                EditorLocale::EnUs,
-                                EditorLocale::EnUs.display_name(),
-                            );
-                        });
+                    ui.menu_button(self.tx(TextKey::MenuWindow), |ui| {
+                        ui.checkbox(&mut self.show_open_project_window, window_open_project);
+                        ui.checkbox(&mut self.show_export_bank_window, window_export_bank);
+                        ui.checkbox(&mut self.show_bank_events_window, window_bank_events);
+                        ui.checkbox(&mut self.show_diagnostics_window, window_diagnostics);
+                        ui.checkbox(&mut self.show_log_window, window_log);
+                    });
+
+                    ui.menu_button(self.tx(TextKey::MenuHelp), |ui| {
+                        if ui.button(self.tx(TextKey::WindowAbout)).clicked() {
+                            self.show_about_window = true;
+                            ui.close();
+                        }
+                    });
+
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        egui::ComboBox::from_id_salt("editor_locale")
+                            .selected_text(self.locale.display_name())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.locale,
+                                    EditorLocale::ZhCn,
+                                    EditorLocale::ZhCn.display_name(),
+                                );
+                                ui.selectable_value(
+                                    &mut self.locale,
+                                    EditorLocale::EnUs,
+                                    EditorLocale::EnUs.display_name(),
+                                );
+                            });
+                        ui.label(self.tx(TextKey::Language));
+                    });
                 });
+            });
+    }
 
-                if !self.status_message.is_empty() {
-                    ui.label(RichText::new(&self.status_message).color(Color32::LIGHT_BLUE));
-                }
+    fn draw_status_bar(&mut self, ctx: &egui::Context) {
+        if !self.show_status_bar {
+            return;
+        }
 
-                let dirty_label = if self.has_unsaved_changes {
-                    self.tx(TextKey::UnsavedChanges)
-                } else {
-                    self.tx(TextKey::SavedStateClean)
-                };
-                let dirty_color = if self.has_unsaved_changes {
-                    Color32::YELLOW
-                } else {
-                    Color32::LIGHT_GREEN
-                };
-                ui.label(RichText::new(dirty_label).color(dirty_color));
+        egui::TopBottomPanel::bottom("status_bar")
+            .resizable(false)
+            .exact_height(24.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(self.tx(TextKey::Ready));
+                    ui.separator();
+                    let project_label = self
+                        .loaded_project
+                        .as_ref()
+                        .map(|project| project.name.to_string())
+                        .unwrap_or_else(|| self.tx(TextKey::NoProjectLoadedShort).to_owned());
+                    ui.label(format!(
+                        "{}: {}",
+                        self.tx(TextKey::CurrentProject),
+                        project_label
+                    ));
+                    ui.separator();
+                    let bank_label = self
+                        .selected_bank_name
+                        .clone()
+                        .unwrap_or_else(|| "-".to_owned());
+                    ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank_label));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let dirty_label = if self.has_unsaved_changes {
+                            self.tx(TextKey::UnsavedChanges)
+                        } else {
+                            self.tx(TextKey::SavedProjectStatus)
+                        };
+                        let color = if self.has_unsaved_changes {
+                            Color32::YELLOW
+                        } else {
+                            Color32::LIGHT_GREEN
+                        };
+                        ui.label(RichText::new(dirty_label).color(color));
+                    });
+                });
+            });
+    }
+
+    fn draw_tool_strip(&mut self, ctx: &egui::Context) {
+        if !self.show_tool_strip {
+            return;
+        }
+
+        egui::TopBottomPanel::bottom("tool_strip")
+            .resizable(false)
+            .exact_height(30.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(self.tx(TextKey::ToolStrip));
+                    ui.separator();
+                    let bank_label = self
+                        .selected_bank_name
+                        .clone()
+                        .unwrap_or_else(|| "-".to_owned());
+                    ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank_label));
+                    ui.separator();
+                    let validation_label = if self.validation_report.can_export() {
+                        self.tx(TextKey::ValidationReady)
+                    } else {
+                        self.tx(TextKey::ValidationBlocked)
+                    };
+                    let validation_color = if self.validation_report.can_export() {
+                        Color32::LIGHT_GREEN
+                    } else {
+                        Color32::LIGHT_RED
+                    };
+                    ui.label(RichText::new(validation_label).color(validation_color));
+                    ui.separator();
+                    ui.label(self.tx(TextKey::PreviewUnavailable));
+                });
             });
     }
 
     fn draw_left_panel(&mut self, ctx: &egui::Context) {
+        if !self.show_project_panel {
+            return;
+        }
+
         egui::SidePanel::left("project_panel")
             .resizable(true)
             .default_width(280.0)
@@ -230,22 +376,116 @@ impl EditorState {
 
     fn draw_center_panel(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading(self.tx(TextKey::BankExport));
+            ui.with_layout(Layout::top_down_justified(Align::Center), |ui| {
+                ui.add_space(40.0);
+                ui.heading(self.tx(TextKey::WelcomeBack));
+                ui.label(RichText::new(self.tx(TextKey::WelcomeTitle)).size(28.0));
+                ui.label(self.tx(TextKey::WelcomeSubtitle));
+
+                ui.add_space(16.0);
+                ui.group(|ui| {
+                    ui.set_max_width(520.0);
+                    ui.label(RichText::new(self.tx(TextKey::QuickActions)).strong());
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button(self.tx(TextKey::OpenProject)).clicked() {
+                            self.show_open_project_window = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.loaded_project.is_some(),
+                                egui::Button::new(self.tx(TextKey::ContinueProject)),
+                            )
+                            .clicked()
+                        {
+                            self.show_bank_events_window = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.loaded_project.is_some(),
+                                egui::Button::new(self.tx(TextKey::WindowExportBank)),
+                            )
+                            .clicked()
+                        {
+                            self.show_export_bank_window = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                self.loaded_project.is_some(),
+                                egui::Button::new(self.tx(TextKey::WindowDiagnostics)),
+                            )
+                            .clicked()
+                        {
+                            self.show_diagnostics_window = true;
+                        }
+                        if ui.button(self.tx(TextKey::WindowLog)).clicked() {
+                            self.show_log_window = true;
+                        }
+                    });
+                });
+
+                ui.add_space(20.0);
+                ui.group(|ui| {
+                    ui.set_max_width(520.0);
+                    let project_label = self
+                        .loaded_project
+                        .as_ref()
+                        .map(|project| project.name.to_string())
+                        .unwrap_or_else(|| "-".to_owned());
+                    let bank_label = self
+                        .selected_bank_name
+                        .clone()
+                        .unwrap_or_else(|| "-".to_owned());
+                    ui.label(format!(
+                        "{}: {}",
+                        self.tx(TextKey::CurrentProject),
+                        project_label
+                    ));
+                    ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank_label));
+                    if !self.status_message.is_empty() {
+                        ui.label(RichText::new(&self.status_message).color(Color32::LIGHT_BLUE));
+                    }
+                });
+
+                ui.add_space(20.0);
+                ui.group(|ui| {
+                    ui.set_max_width(520.0);
+                    ui.label(RichText::new(self.tx(TextKey::RecentProjects)).strong());
+                    if self.recent_projects.is_empty() {
+                        ui.label(self.tx(TextKey::NoRecentProjects));
+                    } else {
+                        let recent_projects = self.recent_projects.clone();
+                        for path in recent_projects {
+                            if ui.button(path.as_str()).clicked() {
+                                self.project_path = path;
+                                self.load_project();
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    fn draw_right_panel(&mut self, ctx: &egui::Context) {
+        if !self.show_inspector_panel {
+            return;
+        }
+
+        egui::SidePanel::right("inspector_panel")
+            .resizable(true)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                ui.heading(self.tx(TextKey::Inspector));
                 ui.separator();
 
                 let Some(project) = &self.loaded_project else {
-                    ui.label(self.tx(TextKey::LoadProjectFirst));
+                    ui.label(self.tx(TextKey::NoProjectLoadedShort));
                     return;
                 };
 
-                let Some(selected_bank_name) = self.selected_bank_name.clone() else {
-                    ui.label(self.tx(TextKey::SelectBankFirst));
-                    return;
-                };
-
-                let Some(bank) = project.bank_named(&selected_bank_name) else {
-                    ui.colored_label(Color32::RED, self.tx(TextKey::SelectedBankMissing));
+                let Some(bank) = self.selected_bank(project) else {
+                    ui.label(self.tx(TextKey::NoBankSelected));
                     return;
                 };
 
@@ -265,145 +505,14 @@ impl EditorState {
                     self.tx(TextKey::SnapshotCount),
                     bank.snapshots.len()
                 ));
-
-                ui.add_space(8.0);
-                let output_path_hint = self.tx(TextKey::OutputPathHint);
-                ui.label(self.tx(TextKey::OutputPath));
-                ui.add(
-                    TextEdit::singleline(&mut self.export_path)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(output_path_hint),
-                );
-
-                ui.add_space(12.0);
-                self.draw_validation_report(ui);
-
-                ui.add_space(8.0);
-                let mut should_export = false;
-                let mut should_reset_export_path = false;
-                let mut should_save_project = false;
-                let can_export =
-                    self.validation_report.can_export() && !self.export_path.trim().is_empty();
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            can_export,
-                            egui::Button::new(self.tx(TextKey::ExportCompiledBank)),
-                        )
-                        .clicked()
-                    {
-                        should_export = true;
-                    }
-
-                    if ui
-                        .button(self.tx(TextKey::ResetDefaultExportPath))
-                        .clicked()
-                    {
-                        should_reset_export_path = true;
-                    }
-
-                    let save_button_label = if self.has_unsaved_changes {
-                        self.tx(TextKey::SaveProject)
-                    } else {
-                        self.tx(TextKey::SaveProjectDisabled)
-                    };
-                    if ui
-                        .add_enabled(
-                            self.has_unsaved_changes,
-                            egui::Button::new(save_button_label),
-                        )
-                        .clicked()
-                    {
-                        should_save_project = true;
-                    }
-                });
-
-                if should_export {
-                    self.export_selected_bank();
-                }
-
-                if should_reset_export_path {
-                    self.export_path = self.suggest_export_path(&selected_bank_name);
-                }
-
-                if should_save_project {
-                    self.save_project();
-                }
-
-                ui.add_space(12.0);
-                ui.group(|ui| {
-                    ui.label(RichText::new(self.tx(TextKey::ExportGuide)).strong());
-                    ui.label(self.tx(TextKey::ExportGuideLine1));
-                    ui.label(self.tx(TextKey::ExportGuideLine2));
-                });
-
-                ui.add_space(12.0);
-                self.draw_event_bank_editor(ui);
-
-                ui.add_space(12.0);
-                self.draw_export_report(ui);
-            });
-        });
-    }
-
-    fn draw_right_panel(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("inspector_panel")
-            .resizable(true)
-            .default_width(320.0)
-            .show(ctx, |ui| {
-                ui.heading(self.tx(TextKey::Inspector));
                 ui.separator();
-
-                let Some(project) = &self.loaded_project else {
-                    ui.label(self.tx(TextKey::NoProjectLoadedShort));
-                    return;
-                };
-
-                let Some(bank) = self.selected_bank(project) else {
-                    ui.label(self.tx(TextKey::NoBankSelected));
-                    return;
-                };
-
                 self.draw_event_list(ui, project, bank);
                 ui.separator();
                 self.draw_bus_list(ui, project, bank);
                 ui.separator();
                 self.draw_snapshot_list(ui, project, bank);
-            });
-    }
-
-    fn draw_bottom_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("log_panel")
-            .resizable(true)
-            .default_height(160.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading(self.tx(TextKey::Log));
-                    if ui.button(self.tx(TextKey::Clear)).clicked() {
-                        self.logs.clear();
-                    }
-                });
                 ui.separator();
-
-                if self.logs.is_empty() {
-                    ui.label(self.tx(TextKey::NoLogs));
-                    return;
-                }
-
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        for entry in &self.logs {
-                            let color = match entry.level {
-                                LogLevel::Info => Color32::LIGHT_GREEN,
-                                LogLevel::Error => Color32::LIGHT_RED,
-                            };
-                            ui.label(
-                                RichText::new(format!("[{}] {}", entry.timestamp, entry.message))
-                                    .color(color),
-                            );
-                        }
-                    });
+                self.draw_validation_report(ui);
             });
     }
 
@@ -529,6 +638,7 @@ impl EditorState {
                 self.loaded_project = Some(project);
                 self.last_export = None;
                 self.has_unsaved_changes = false;
+                self.push_recent_project(self.project_path.clone());
                 self.refresh_validation();
                 self.status_message = self.tr(TextTemplate::ProjectLoaded {
                     path: self.project_path.clone(),
@@ -697,6 +807,12 @@ impl EditorState {
 
     fn push_error_log(&mut self, message: String) {
         self.logs.push(LogEntry::new(LogLevel::Error, message));
+    }
+
+    fn push_recent_project(&mut self, path: String) {
+        self.recent_projects.retain(|item| item != &path);
+        self.recent_projects.insert(0, path);
+        self.recent_projects.truncate(5);
     }
 
     fn draw_event_bank_editor(&mut self, ui: &mut egui::Ui) {
@@ -978,6 +1094,192 @@ impl EditorState {
                 ));
             }
         });
+    }
+
+    fn draw_open_project_window(&mut self, ctx: &egui::Context) {
+        if !self.show_open_project_window {
+            return;
+        }
+
+        let mut open = self.show_open_project_window;
+        egui::Window::new(self.tx(TextKey::WindowOpenProject))
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                let project_path_hint = self.tx(TextKey::ProjectPathHint);
+                ui.label(self.tx(TextKey::ProjectPath));
+                ui.add(
+                    TextEdit::singleline(&mut self.project_path)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(project_path_hint),
+                );
+                ui.add_space(8.0);
+                if ui.button(self.tx(TextKey::LoadProject)).clicked() {
+                    self.load_project();
+                }
+                ui.separator();
+                ui.label(RichText::new(self.tx(TextKey::RecentProjects)).strong());
+                if self.recent_projects.is_empty() {
+                    ui.label(self.tx(TextKey::NoRecentProjects));
+                } else {
+                    let recent_projects = self.recent_projects.clone();
+                    for path in recent_projects {
+                        if ui.button(path.as_str()).clicked() {
+                            self.project_path = path;
+                            self.load_project();
+                        }
+                    }
+                }
+            });
+        self.show_open_project_window = open;
+    }
+
+    fn draw_export_bank_window(&mut self, ctx: &egui::Context) {
+        if !self.show_export_bank_window {
+            return;
+        }
+
+        let mut open = self.show_export_bank_window;
+        egui::Window::new(self.tx(TextKey::WindowExportBank))
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                let Some(project) = &self.loaded_project else {
+                    ui.label(self.tx(TextKey::LoadProjectFirst));
+                    return;
+                };
+                let Some(selected_bank_name) = self.selected_bank_name.clone() else {
+                    ui.label(self.tx(TextKey::SelectBankFirst));
+                    return;
+                };
+                let Some(bank) = project.bank_named(&selected_bank_name) else {
+                    ui.label(self.tx(TextKey::SelectedBankMissing));
+                    return;
+                };
+
+                ui.label(format!("{}: {}", self.tx(TextKey::CurrentBank), bank.name));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::EventCount),
+                    bank.events.len()
+                ));
+                let output_path_hint = self.tx(TextKey::OutputPathHint);
+                ui.label(self.tx(TextKey::OutputPath));
+                ui.add(
+                    TextEdit::singleline(&mut self.export_path)
+                        .desired_width(f32::INFINITY)
+                        .hint_text(output_path_hint),
+                );
+                ui.horizontal(|ui| {
+                    let can_export =
+                        self.validation_report.can_export() && !self.export_path.trim().is_empty();
+                    if ui
+                        .add_enabled(
+                            can_export,
+                            egui::Button::new(self.tx(TextKey::ExportCompiledBank)),
+                        )
+                        .clicked()
+                    {
+                        self.export_selected_bank();
+                    }
+                    if ui
+                        .button(self.tx(TextKey::ResetDefaultExportPath))
+                        .clicked()
+                    {
+                        self.export_path = self.suggest_export_path(&selected_bank_name);
+                    }
+                });
+                ui.separator();
+                self.draw_export_report(ui);
+            });
+        self.show_export_bank_window = open;
+    }
+
+    fn draw_bank_events_window(&mut self, ctx: &egui::Context) {
+        if !self.show_bank_events_window {
+            return;
+        }
+
+        let mut open = self.show_bank_events_window;
+        egui::Window::new(self.tx(TextKey::WindowBankEvents))
+            .open(&mut open)
+            .default_width(560.0)
+            .default_height(420.0)
+            .show(ctx, |ui| {
+                self.draw_event_bank_editor(ui);
+            });
+        self.show_bank_events_window = open;
+    }
+
+    fn draw_diagnostics_window(&mut self, ctx: &egui::Context) {
+        if !self.show_diagnostics_window {
+            return;
+        }
+
+        let mut open = self.show_diagnostics_window;
+        egui::Window::new(self.tx(TextKey::WindowDiagnostics))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                self.draw_validation_report(ui);
+            });
+        self.show_diagnostics_window = open;
+    }
+
+    fn draw_log_window(&mut self, ctx: &egui::Context) {
+        if !self.show_log_window {
+            return;
+        }
+
+        let mut open = self.show_log_window;
+        egui::Window::new(self.tx(TextKey::WindowLog))
+            .open(&mut open)
+            .default_width(520.0)
+            .default_height(260.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(self.tx(TextKey::Log));
+                    if ui.button(self.tx(TextKey::Clear)).clicked() {
+                        self.logs.clear();
+                    }
+                });
+                ui.separator();
+                if self.logs.is_empty() {
+                    ui.label(self.tx(TextKey::NoLogs));
+                    return;
+                }
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for entry in &self.logs {
+                            let color = match entry.level {
+                                LogLevel::Info => Color32::LIGHT_GREEN,
+                                LogLevel::Error => Color32::LIGHT_RED,
+                            };
+                            ui.label(
+                                RichText::new(format!("[{}] {}", entry.timestamp, entry.message))
+                                    .color(color),
+                            );
+                        }
+                    });
+            });
+        self.show_log_window = open;
+    }
+
+    fn draw_about_window(&mut self, ctx: &egui::Context) {
+        if !self.show_about_window {
+            return;
+        }
+
+        let mut open = self.show_about_window;
+        egui::Window::new(self.tx(TextKey::WindowAbout))
+            .open(&mut open)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.heading(self.tx(TextKey::WelcomeTitle));
+                ui.label(self.tx(TextKey::AboutText));
+            });
+        self.show_about_window = open;
     }
 }
 
