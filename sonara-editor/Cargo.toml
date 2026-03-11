@@ -10,3 +10,4 @@ egui = "0.33.0"
 egui-chinese-font = { git = "https://github.com/umoho/egui-chinese-font", rev = "61669dbb647c05b5bdf2ca39d9205ae1e7772347" }
 sonara-build = { path = "../sonara-build" }
 sonara-model = { path = "../sonara-model" }
+uuid = { version = "1", features = ["v7"] }

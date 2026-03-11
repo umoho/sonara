@@ -18,9 +18,11 @@ use sonara_build::{
     compile_project_bank_to_file,
 };
 use sonara_model::{
-    AuthoringProject, BankDefinition, Bus, Event, EventContentNode, EventContentRoot, EventKind,
-    NodeId, NodeRef, ProjectFileError, SamplerNode, Snapshot, SpatialMode,
+    AuthoringProject, BankDefinition, Bus, EnumParameter, Event, EventContentNode,
+    EventContentRoot, EventKind, NodeId, NodeRef, Parameter, ParameterScope, ProjectFileError,
+    SamplerNode, Snapshot, SpatialMode, SwitchCase, SwitchNode,
 };
+use uuid::Uuid;
 
 /// 默认打开的 demo project 路径。
 pub const DEFAULT_PROJECT_PATH: &str = "sonara-app/assets/demo/project.json";
@@ -125,6 +127,8 @@ pub struct EditorState {
     pub new_event_name: String,
     pub new_bus_name: String,
     pub new_snapshot_name: String,
+    pub new_parameter_name: String,
+    pub new_parameter_variants: String,
     pub status_message: String,
     pub logs: Vec<LogEntry>,
 }
@@ -134,6 +138,7 @@ pub enum SelectedItem {
     Event(sonara_model::EventId),
     Bus(sonara_model::BusId),
     Snapshot(sonara_model::SnapshotId),
+    Parameter(sonara_model::ParameterId),
 }
 
 impl Default for EditorState {
@@ -162,10 +167,42 @@ impl Default for EditorState {
             new_event_name: String::new(),
             new_bus_name: String::new(),
             new_snapshot_name: String::new(),
+            new_parameter_name: String::new(),
+            new_parameter_variants: String::new(),
             status_message: String::new(),
             logs: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct AssetOption {
+    id: Uuid,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct EnumParameterOption {
+    id: sonara_model::ParameterId,
+    name: String,
+    default_value: String,
+    variants: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventContentMode {
+    SingleAsset,
+    StateSwitch,
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
+struct EventContentSummary {
+    mode: EventContentMode,
+    asset_id: Option<Uuid>,
+    parameter_id: Option<sonara_model::ParameterId>,
+    default_variant: Option<String>,
+    cases: Vec<(String, Uuid)>,
 }
 
 impl EditorState {
@@ -175,6 +212,50 @@ impl EditorState {
 
     fn tr(&self, template_value: TextTemplate) -> String {
         template(self.locale, template_value)
+    }
+
+    fn asset_options(&self) -> Vec<AssetOption> {
+        self.loaded_project
+            .as_ref()
+            .map(|project| {
+                project
+                    .assets
+                    .iter()
+                    .map(|asset| AssetOption {
+                        id: asset.id,
+                        name: asset.name.to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn enum_parameter_options(&self) -> Vec<EnumParameterOption> {
+        self.loaded_project
+            .as_ref()
+            .map(|project| {
+                project
+                    .parameters
+                    .iter()
+                    .filter_map(|parameter| {
+                        let Parameter::Enum(parameter) = parameter else {
+                            return None;
+                        };
+
+                        Some(EnumParameterOption {
+                            id: parameter.id,
+                            name: parameter.name.to_string(),
+                            default_value: parameter.default_value.to_string(),
+                            variants: parameter
+                                .variants
+                                .iter()
+                                .map(|value| value.to_string())
+                                .collect(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn draw_menu_bar(&mut self, ctx: &egui::Context) {
@@ -357,6 +438,11 @@ impl EditorState {
                     "{}: {}",
                     self.tx(TextKey::Events),
                     project.events.len()
+                ));
+                ui.label(format!(
+                    "{}: {}",
+                    self.tx(TextKey::Parameters),
+                    project.parameters.len()
                 ));
                 ui.label(format!(
                     "{}: {}",
@@ -774,6 +860,8 @@ impl EditorState {
         let mut should_create_event = false;
         let mut should_create_bus = false;
         let mut should_create_snapshot = false;
+        let enum_parameters = self.enum_parameter_options();
+        let mut should_create_parameter = false;
 
         ui.group(|ui| {
             ui.label(RichText::new(self.tx(TextKey::BankContentsEditor)).strong());
@@ -821,6 +909,45 @@ impl EditorState {
                     should_create_snapshot = true;
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(self.tx(TextKey::NewParameterName));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_parameter_name)
+                        .desired_width(180.0)
+                        .hint_text("music_state"),
+                );
+                ui.label(self.tx(TextKey::NewParameterVariants));
+                ui.add(
+                    TextEdit::singleline(&mut self.new_parameter_variants)
+                        .desired_width(220.0)
+                        .hint_text("explore, combat, stealth"),
+                );
+                if ui.button(self.tx(TextKey::CreateEnumParameter)).clicked() {
+                    should_create_parameter = true;
+                }
+            });
+            ui.label(self.tx(TextKey::EnumParameterHint));
+
+            ui.separator();
+            ui.label(RichText::new(self.tx(TextKey::ProjectParameters)).strong());
+            if enum_parameters.is_empty() {
+                ui.label(self.tx(TextKey::NoParameters));
+            } else {
+                for parameter in &enum_parameters {
+                    ui.horizontal(|ui| {
+                        let selected =
+                            self.selected_item == Some(SelectedItem::Parameter(parameter.id));
+                        if ui.selectable_label(selected, &parameter.name).clicked() {
+                            self.selected_item = Some(SelectedItem::Parameter(parameter.id));
+                        }
+                        ui.label(format!(
+                            "{}: {}",
+                            self.tx(TextKey::VariantCount),
+                            parameter.variants.len()
+                        ));
+                    });
+                }
+            }
 
             ui.separator();
             ui.label(self.tx(TextKey::CurrentBankEvents));
@@ -980,6 +1107,10 @@ impl EditorState {
         if should_create_snapshot {
             self.create_snapshot_in_selected_bank();
         }
+
+        if should_create_parameter {
+            self.create_enum_parameter();
+        }
     }
 
     fn add_event_to_selected_bank(&mut self, event_id: sonara_model::EventId) {
@@ -1015,6 +1146,9 @@ impl EditorState {
         let original_len = bank.events.len();
         bank.events.retain(|id| *id != event_id);
         if bank.events.len() != original_len {
+            if self.selected_item == Some(SelectedItem::Event(event_id)) {
+                self.selected_item = None;
+            }
             self.has_unsaved_changes = true;
             self.last_export = None;
             self.refresh_validation();
@@ -1054,6 +1188,9 @@ impl EditorState {
         let original_len = bank.buses.len();
         bank.buses.retain(|id| *id != bus_id);
         if bank.buses.len() != original_len {
+            if self.selected_item == Some(SelectedItem::Bus(bus_id)) {
+                self.selected_item = None;
+            }
             self.has_unsaved_changes = true;
             self.last_export = None;
             self.refresh_validation();
@@ -1093,6 +1230,9 @@ impl EditorState {
         let original_len = bank.snapshots.len();
         bank.snapshots.retain(|id| *id != snapshot_id);
         if bank.snapshots.len() != original_len {
+            if self.selected_item == Some(SelectedItem::Snapshot(snapshot_id)) {
+                self.selected_item = None;
+            }
             self.has_unsaved_changes = true;
             self.last_export = None;
             self.refresh_validation();
@@ -1137,6 +1277,7 @@ impl EditorState {
         project.events.push(event);
         self.new_event_name.clear();
         self.add_event_to_selected_bank(event_id);
+        self.selected_item = Some(SelectedItem::Event(event_id));
         self.status_message = self.tr(TextTemplate::CreatedEventInBank {
             event_name: event_name.clone(),
             bank_name: bank_name.clone(),
@@ -1165,6 +1306,7 @@ impl EditorState {
         project.buses.push(bus);
         self.new_bus_name.clear();
         self.add_bus_to_selected_bank(bus_id);
+        self.selected_item = Some(SelectedItem::Bus(bus_id));
         self.status_message = self.tr(TextTemplate::CreatedBusInBank {
             bus_name: bus_name.clone(),
             bank_name: bank_name.clone(),
@@ -1199,6 +1341,7 @@ impl EditorState {
         project.snapshots.push(snapshot);
         self.new_snapshot_name.clear();
         self.add_snapshot_to_selected_bank(snapshot_id);
+        self.selected_item = Some(SelectedItem::Snapshot(snapshot_id));
         self.status_message = self.tr(TextTemplate::CreatedSnapshotInBank {
             snapshot_name: snapshot_name.clone(),
             bank_name: bank_name.clone(),
@@ -1207,6 +1350,41 @@ impl EditorState {
             snapshot_name,
             bank_name,
         }));
+    }
+
+    fn create_enum_parameter(&mut self) {
+        let parameter_name = self.new_parameter_name.trim().to_owned();
+        if parameter_name.is_empty() {
+            return;
+        }
+
+        let variants = parse_variant_list(&self.new_parameter_variants);
+        if variants.is_empty() {
+            self.status_message = self.tx(TextKey::CreateParameterNeedsVariants).to_owned();
+            return;
+        }
+
+        let Some(project) = self.loaded_project.as_mut() else {
+            return;
+        };
+
+        let parameter = EnumParameter {
+            id: sonara_model::ParameterId::new(),
+            name: parameter_name.clone().into(),
+            scope: ParameterScope::Global,
+            default_value: variants[0].clone().into(),
+            variants: variants.iter().cloned().map(Into::into).collect(),
+        };
+        let parameter_id = parameter.id;
+        project.parameters.push(Parameter::Enum(parameter));
+        self.new_parameter_name.clear();
+        self.new_parameter_variants.clear();
+        self.selected_item = Some(SelectedItem::Parameter(parameter_id));
+        self.on_project_changed();
+        self.status_message = self.tr(TextTemplate::CreatedParameter {
+            parameter_name: parameter_name.clone(),
+        });
+        self.push_info_log(self.tr(TextTemplate::CreatedParameter { parameter_name }));
     }
 
     fn refresh_validation(&mut self) {
@@ -1290,6 +1468,8 @@ impl EditorState {
             return;
         }
 
+        let asset_options = self.asset_options();
+        let enum_parameter_options = self.enum_parameter_options();
         let node_count_label = self.tx(TextKey::NodeCount);
         let resolved_asset_count_label = self.tx(TextKey::ResolvedAssetCount);
         let default_volume_label = self.tx(TextKey::DefaultVolume);
@@ -1298,8 +1478,13 @@ impl EditorState {
         let events_label = self.tx(TextKey::Events);
         let buses_label = self.tx(TextKey::Buses);
         let snapshots_label = self.tx(TextKey::Snapshots);
+        let parameters_label = self.tx(TextKey::Parameters);
         let kind_label = self.tx(TextKey::Kind);
         let spatial_label = self.tx(TextKey::Spatial);
+        let parameter_scope_label = self.tx(TextKey::ParameterScope);
+        let parameter_variants_label = self.tx(TextKey::ParameterVariants);
+        let default_value_label = self.tx(TextKey::DefaultValue);
+        let unsupported_parameter_type_label = self.tx(TextKey::UnsupportedParameterType);
         let mut changed = false;
 
         match self.selected_item {
@@ -1376,6 +1561,15 @@ impl EditorState {
                     resolved_asset_count_label,
                     collect_event_asset_ids(event).len()
                 ));
+                ui.separator();
+                draw_event_content_editor(
+                    ui,
+                    self.locale,
+                    event,
+                    &asset_options,
+                    &enum_parameter_options,
+                    &mut changed,
+                );
             }
             Some(SelectedItem::Bus(bus_id)) => {
                 let Some(project) = self.loaded_project.as_mut() else {
@@ -1445,6 +1639,124 @@ impl EditorState {
                     )
                     .changed();
                 ui.label(format!("Targets: {}", snapshot.targets.len()));
+            }
+            Some(SelectedItem::Parameter(parameter_id)) => {
+                let Some(project) = self.loaded_project.as_mut() else {
+                    return;
+                };
+                let Some(parameter) = project
+                    .parameters
+                    .iter_mut()
+                    .find(|parameter| parameter.id() == parameter_id)
+                else {
+                    ui.label(self.tx(TextKey::NoSelection));
+                    return;
+                };
+                let Parameter::Enum(parameter) = parameter else {
+                    ui.label(unsupported_parameter_type_label);
+                    return;
+                };
+
+                ui.label(RichText::new(parameters_label).strong());
+                ui.label(format!("ID: {}", parameter.id.0));
+
+                let mut parameter_name = parameter.name.to_string();
+                changed |= ui
+                    .add(
+                        TextEdit::singleline(&mut parameter_name)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("music_state"),
+                    )
+                    .changed();
+                if parameter.name.as_str() != parameter_name {
+                    parameter.name = parameter_name.into();
+                }
+
+                ui.label(parameter_scope_label);
+                egui::ComboBox::from_id_salt(("parameter_scope", parameter.id.0))
+                    .selected_text(format_parameter_scope_display(self.locale, parameter.scope))
+                    .show_ui(ui, |ui| {
+                        changed |= ui
+                            .selectable_value(
+                                &mut parameter.scope,
+                                ParameterScope::Global,
+                                format_parameter_scope_display(self.locale, ParameterScope::Global),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut parameter.scope,
+                                ParameterScope::Emitter,
+                                format_parameter_scope_display(
+                                    self.locale,
+                                    ParameterScope::Emitter,
+                                ),
+                            )
+                            .changed();
+                        changed |= ui
+                            .selectable_value(
+                                &mut parameter.scope,
+                                ParameterScope::EventInstance,
+                                format_parameter_scope_display(
+                                    self.locale,
+                                    ParameterScope::EventInstance,
+                                ),
+                            )
+                            .changed();
+                    });
+
+                let mut variants_text = parameter
+                    .variants
+                    .iter()
+                    .map(|variant| variant.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ui.label(parameter_variants_label);
+                changed |= ui
+                    .add(
+                        TextEdit::singleline(&mut variants_text)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("explore, combat, stealth"),
+                    )
+                    .changed();
+
+                let parsed_variants = parse_variant_list(&variants_text);
+                if !parsed_variants.is_empty() {
+                    let current_variants: Vec<String> = parameter
+                        .variants
+                        .iter()
+                        .map(|variant| variant.to_string())
+                        .collect();
+                    if current_variants != parsed_variants {
+                        parameter.variants =
+                            parsed_variants.iter().cloned().map(Into::into).collect();
+                    }
+                }
+
+                if !parameter
+                    .variants
+                    .iter()
+                    .any(|variant| variant == &parameter.default_value)
+                {
+                    if let Some(first_variant) = parameter.variants.first() {
+                        parameter.default_value = first_variant.clone();
+                    }
+                }
+
+                ui.label(default_value_label);
+                egui::ComboBox::from_id_salt(("parameter_default_value", parameter.id.0))
+                    .selected_text(parameter.default_value.as_str())
+                    .show_ui(ui, |ui| {
+                        for variant in &parameter.variants {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut parameter.default_value,
+                                    variant.clone(),
+                                    variant.as_str(),
+                                )
+                                .changed();
+                        }
+                    });
             }
             None => {
                 ui.label(self.tx(TextKey::NoSelection));
@@ -1729,6 +2041,390 @@ impl EditorState {
     }
 }
 
+fn draw_event_content_editor(
+    ui: &mut egui::Ui,
+    locale: EditorLocale,
+    event: &mut Event,
+    asset_options: &[AssetOption],
+    enum_parameter_options: &[EnumParameterOption],
+    changed: &mut bool,
+) {
+    ui.label(RichText::new(text(locale, TextKey::EventContent)).strong());
+    let mut content_changed = false;
+
+    if asset_options.is_empty() {
+        ui.label(text(locale, TextKey::CreateEventNeedsAsset));
+        return;
+    }
+
+    let summary = summarize_event_content(event);
+
+    match summary.mode {
+        EventContentMode::SingleAsset => {
+            ui.label(format!(
+                "{}: {}",
+                text(locale, TextKey::ContentMode),
+                text(locale, TextKey::SingleAsset)
+            ));
+
+            if let Some(asset_id) = summary.asset_id {
+                let mut selected_asset_id = asset_id;
+                egui::ComboBox::from_id_salt(("event_sampler_asset", event.id.0))
+                    .selected_text(format_asset_display(asset_options, selected_asset_id))
+                    .show_ui(ui, |ui| {
+                        for asset in asset_options {
+                            content_changed |= ui
+                                .selectable_value(&mut selected_asset_id, asset.id, &asset.name)
+                                .changed();
+                        }
+                    });
+
+                if selected_asset_id != asset_id {
+                    set_event_root_to_sampler(event, selected_asset_id);
+                    content_changed = true;
+                }
+            }
+
+            if enum_parameter_options.is_empty() {
+                ui.label(text(locale, TextKey::NoEnumParameters));
+            } else if ui
+                .button(text(locale, TextKey::ConvertToStateSwitch))
+                .clicked()
+            {
+                let parameter = &enum_parameter_options[0];
+                let default_asset_id = summary.asset_id.unwrap_or(asset_options[0].id);
+                set_event_root_to_switch(event, parameter, default_asset_id, None);
+                content_changed = true;
+            }
+        }
+        EventContentMode::StateSwitch => {
+            ui.label(format!(
+                "{}: {}",
+                text(locale, TextKey::ContentMode),
+                text(locale, TextKey::StateSwitch)
+            ));
+
+            if enum_parameter_options.is_empty() {
+                ui.label(text(locale, TextKey::NoEnumParameters));
+                if ui
+                    .button(text(locale, TextKey::ConvertToSingleAsset))
+                    .clicked()
+                {
+                    let fallback_asset_id = summary
+                        .cases
+                        .first()
+                        .map(|(_, asset_id)| *asset_id)
+                        .unwrap_or(asset_options[0].id);
+                    set_event_root_to_sampler(event, fallback_asset_id);
+                    *changed = true;
+                }
+                return;
+            }
+
+            let current_parameter_id = summary.parameter_id.unwrap_or(enum_parameter_options[0].id);
+            let mut selected_parameter_id = current_parameter_id;
+
+            ui.label(text(locale, TextKey::SwitchParameter));
+            egui::ComboBox::from_id_salt(("event_switch_parameter", event.id.0))
+                .selected_text(format_parameter_display(
+                    enum_parameter_options,
+                    selected_parameter_id,
+                ))
+                .show_ui(ui, |ui| {
+                    for parameter in enum_parameter_options {
+                        content_changed |= ui
+                            .selectable_value(
+                                &mut selected_parameter_id,
+                                parameter.id,
+                                &parameter.name,
+                            )
+                            .changed();
+                    }
+                });
+
+            let selected_parameter = enum_parameter_options
+                .iter()
+                .find(|parameter| parameter.id == selected_parameter_id)
+                .unwrap_or(&enum_parameter_options[0]);
+
+            let default_asset_id = summary
+                .cases
+                .first()
+                .map(|(_, asset_id)| *asset_id)
+                .or(summary.asset_id)
+                .unwrap_or(asset_options[0].id);
+            let mut case_assets = selected_parameter
+                .variants
+                .iter()
+                .map(|variant| {
+                    let asset_id = summary
+                        .cases
+                        .iter()
+                        .find(|(case_variant, _)| case_variant == variant)
+                        .map(|(_, asset_id)| *asset_id)
+                        .unwrap_or(default_asset_id);
+                    (variant.clone(), asset_id)
+                })
+                .collect::<Vec<_>>();
+
+            let mut default_variant = summary
+                .default_variant
+                .clone()
+                .or_else(|| Some(selected_parameter.default_value.clone()))
+                .unwrap_or_else(|| selected_parameter.variants[0].clone());
+
+            ui.label(text(locale, TextKey::SwitchVariants));
+            for (variant, asset_id) in &mut case_assets {
+                ui.horizontal(|ui| {
+                    ui.label(variant.as_str());
+                    egui::ComboBox::from_id_salt((
+                        "event_switch_case_asset",
+                        event.id.0,
+                        variant.clone(),
+                    ))
+                    .selected_text(format_asset_display(asset_options, *asset_id))
+                    .show_ui(ui, |ui| {
+                        for asset in asset_options {
+                            content_changed |= ui
+                                .selectable_value(asset_id, asset.id, &asset.name)
+                                .changed();
+                        }
+                    });
+                });
+            }
+
+            ui.label(text(locale, TextKey::DefaultCase));
+            egui::ComboBox::from_id_salt(("event_switch_default_case", event.id.0))
+                .selected_text(default_variant.as_str())
+                .show_ui(ui, |ui| {
+                    for variant in &selected_parameter.variants {
+                        content_changed |= ui
+                            .selectable_value(&mut default_variant, variant.clone(), variant)
+                            .changed();
+                    }
+                });
+
+            if ui
+                .button(text(locale, TextKey::ConvertToSingleAsset))
+                .clicked()
+            {
+                let fallback_asset_id = case_assets
+                    .iter()
+                    .find(|(variant, _)| variant == &default_variant)
+                    .map(|(_, asset_id)| *asset_id)
+                    .unwrap_or(default_asset_id);
+                set_event_root_to_sampler(event, fallback_asset_id);
+                content_changed = true;
+            } else if selected_parameter_id != current_parameter_id || content_changed {
+                set_event_root_to_switch(
+                    event,
+                    selected_parameter,
+                    default_asset_id,
+                    Some((&case_assets, default_variant.as_str())),
+                );
+                content_changed = true;
+            }
+        }
+        EventContentMode::Unsupported => {
+            ui.label(text(locale, TextKey::UnsupportedEventContent));
+            if ui
+                .button(text(locale, TextKey::ConvertToSingleAsset))
+                .clicked()
+            {
+                set_event_root_to_sampler(event, asset_options[0].id);
+                content_changed = true;
+            }
+            if !enum_parameter_options.is_empty()
+                && ui
+                    .button(text(locale, TextKey::ConvertToStateSwitch))
+                    .clicked()
+            {
+                set_event_root_to_switch(
+                    event,
+                    &enum_parameter_options[0],
+                    asset_options[0].id,
+                    None,
+                );
+                content_changed = true;
+            }
+        }
+    }
+
+    *changed |= content_changed;
+}
+
+fn summarize_event_content(event: &Event) -> EventContentSummary {
+    let Some(root_node) = event
+        .root
+        .nodes
+        .iter()
+        .find(|node| node.id() == event.root.root.id)
+    else {
+        return EventContentSummary {
+            mode: EventContentMode::Unsupported,
+            asset_id: None,
+            parameter_id: None,
+            default_variant: None,
+            cases: Vec::new(),
+        };
+    };
+
+    match root_node {
+        EventContentNode::Sampler(node) => EventContentSummary {
+            mode: EventContentMode::SingleAsset,
+            asset_id: Some(node.asset_id),
+            parameter_id: None,
+            default_variant: None,
+            cases: Vec::new(),
+        },
+        EventContentNode::Switch(node) => {
+            let mut cases = Vec::with_capacity(node.cases.len());
+            let mut default_variant = None;
+
+            for case in &node.cases {
+                let Some(EventContentNode::Sampler(sampler)) = event
+                    .root
+                    .nodes
+                    .iter()
+                    .find(|candidate| candidate.id() == case.child.id)
+                else {
+                    return EventContentSummary {
+                        mode: EventContentMode::Unsupported,
+                        asset_id: None,
+                        parameter_id: None,
+                        default_variant: None,
+                        cases: Vec::new(),
+                    };
+                };
+
+                if node.default_case == Some(case.child) {
+                    default_variant = Some(case.variant.to_string());
+                }
+                cases.push((case.variant.to_string(), sampler.asset_id));
+            }
+
+            EventContentSummary {
+                mode: EventContentMode::StateSwitch,
+                asset_id: cases.first().map(|(_, asset_id)| *asset_id),
+                parameter_id: Some(node.parameter_id),
+                default_variant,
+                cases,
+            }
+        }
+        _ => EventContentSummary {
+            mode: EventContentMode::Unsupported,
+            asset_id: None,
+            parameter_id: None,
+            default_variant: None,
+            cases: Vec::new(),
+        },
+    }
+}
+
+fn set_event_root_to_sampler(event: &mut Event, asset_id: Uuid) {
+    let sampler_id = NodeId::new();
+    event.root = EventContentRoot {
+        root: NodeRef { id: sampler_id },
+        nodes: vec![EventContentNode::Sampler(SamplerNode {
+            id: sampler_id,
+            asset_id,
+        })],
+    };
+}
+
+fn set_event_root_to_switch(
+    event: &mut Event,
+    parameter: &EnumParameterOption,
+    fallback_asset_id: Uuid,
+    case_mapping: Option<(&[(String, Uuid)], &str)>,
+) {
+    let switch_id = NodeId::new();
+    let mut nodes = Vec::with_capacity(parameter.variants.len() + 1);
+    let mut cases = Vec::with_capacity(parameter.variants.len());
+    let mut default_case = None;
+
+    for variant in &parameter.variants {
+        let sampler_id = NodeId::new();
+        let asset_id = case_mapping
+            .and_then(|(mapping, _)| {
+                mapping
+                    .iter()
+                    .find(|(case_variant, _)| case_variant == variant)
+                    .map(|(_, asset_id)| *asset_id)
+            })
+            .unwrap_or(fallback_asset_id);
+        let child = NodeRef { id: sampler_id };
+
+        if case_mapping
+            .map(|(_, default_variant)| default_variant == variant.as_str())
+            .unwrap_or_else(|| parameter.default_value == *variant)
+        {
+            default_case = Some(child);
+        }
+
+        cases.push(SwitchCase {
+            variant: variant.clone().into(),
+            child,
+        });
+        nodes.push(EventContentNode::Sampler(SamplerNode {
+            id: sampler_id,
+            asset_id,
+        }));
+    }
+
+    nodes.insert(
+        0,
+        EventContentNode::Switch(SwitchNode {
+            id: switch_id,
+            parameter_id: parameter.id,
+            cases,
+            default_case,
+        }),
+    );
+    event.root = EventContentRoot {
+        root: NodeRef { id: switch_id },
+        nodes,
+    };
+    if !event.default_parameters.contains(&parameter.id) {
+        event.default_parameters.push(parameter.id);
+    }
+}
+
+fn parse_variant_list(input: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+
+    for value in input.split(',') {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !variants.iter().any(|variant| variant == trimmed) {
+            variants.push(trimmed.to_owned());
+        }
+    }
+
+    variants
+}
+
+fn format_asset_display(asset_options: &[AssetOption], asset_id: Uuid) -> String {
+    asset_options
+        .iter()
+        .find(|asset| asset.id == asset_id)
+        .map(|asset| asset.name.clone())
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn format_parameter_display(
+    parameter_options: &[EnumParameterOption],
+    parameter_id: sonara_model::ParameterId,
+) -> String {
+    parameter_options
+        .iter()
+        .find(|parameter| parameter.id == parameter_id)
+        .map(|parameter| parameter.name.clone())
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
 fn render_project_error(error: &ProjectFileError) -> String {
     error.to_string()
 }
@@ -1748,6 +2444,9 @@ fn render_build_error(error: BuildError) -> String {
         BuildError::MissingEventDefinition => "Bank引用了不存在的事件".to_owned(),
         BuildError::MissingBusDefinition => "Bank引用了不存在的总线".to_owned(),
         BuildError::MissingSnapshotDefinition => "Bank引用了不存在的快照".to_owned(),
+        BuildError::MissingParameterDefinition => "事件 switch 引用了不存在的参数".to_owned(),
+        BuildError::SwitchParameterNotEnum => "事件 switch 必须绑定枚举参数".to_owned(),
+        BuildError::UnknownSwitchVariant => "事件 switch 使用了参数中不存在的枚举值".to_owned(),
     }
 }
 
@@ -1779,6 +2478,21 @@ fn format_spatial_mode_display(locale: EditorLocale, spatial: SpatialMode) -> &'
             SpatialMode::None => "None",
             SpatialMode::TwoD => "2D",
             SpatialMode::ThreeD => "3D",
+        },
+    }
+}
+
+fn format_parameter_scope_display(locale: EditorLocale, scope: ParameterScope) -> &'static str {
+    match locale {
+        EditorLocale::ZhCn => match scope {
+            ParameterScope::Global => "全局",
+            ParameterScope::Emitter => "发声体",
+            ParameterScope::EventInstance => "事件实例",
+        },
+        EditorLocale::EnUs => match scope {
+            ParameterScope::Global => "Global",
+            ParameterScope::Emitter => "Emitter",
+            ParameterScope::EventInstance => "Event Instance",
         },
     }
 }

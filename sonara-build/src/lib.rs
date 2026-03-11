@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use sonara_model::{
     AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Event, EventContentNode,
-    EventId, NodeId, NodeRef, ProjectFileError, Snapshot, SnapshotId, StreamingMode,
+    EventId, NodeId, NodeRef, Parameter, ParameterId, ProjectFileError, Snapshot, SnapshotId,
+    StreamingMode,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -38,6 +39,12 @@ pub enum BuildError {
     MissingBusDefinition,
     #[error("bank 定义引用了不存在的 snapshot")]
     MissingSnapshotDefinition,
+    #[error("事件 switch 引用了不存在的参数")]
+    MissingParameterDefinition,
+    #[error("事件 switch 必须绑定枚举参数")]
+    SwitchParameterNotEnum,
+    #[error("事件 switch 引用了参数中不存在的枚举值")]
+    UnknownSwitchVariant,
 }
 
 /// compiled bank 文件的最小 IO 错误。
@@ -181,6 +188,39 @@ pub fn validate_event(event: &Event) -> Result<(), BuildError> {
     Ok(())
 }
 
+/// 对单个事件做和项目参数相关的最小语义校验。
+fn validate_event_against_parameters(
+    event: &Event,
+    parameter_by_id: &HashMap<ParameterId, &Parameter>,
+) -> Result<(), BuildError> {
+    validate_event(event)?;
+
+    for node in &event.root.nodes {
+        let EventContentNode::Switch(node) = node else {
+            continue;
+        };
+
+        let parameter = parameter_by_id
+            .get(&node.parameter_id)
+            .ok_or(BuildError::MissingParameterDefinition)?;
+        let Parameter::Enum(parameter) = parameter else {
+            return Err(BuildError::SwitchParameterNotEnum);
+        };
+
+        for case in &node.cases {
+            if !parameter
+                .variants
+                .iter()
+                .any(|variant| variant == &case.variant)
+            {
+                return Err(BuildError::UnknownSwitchVariant);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// 根据事件和资源列表构建最小 bank 定义
 pub fn build_bank(
     name: impl Into<SmolStr>,
@@ -261,6 +301,11 @@ pub fn compile_bank_definition(
         .iter()
         .map(|snapshot| (snapshot.id, snapshot))
         .collect();
+    let parameter_by_id: HashMap<ParameterId, &Parameter> = project
+        .parameters
+        .iter()
+        .map(|parameter| (parameter.id(), parameter))
+        .collect();
 
     let mut events = Vec::with_capacity(definition.events.len());
     let mut buses = Vec::with_capacity(definition.buses.len());
@@ -270,6 +315,7 @@ pub fn compile_bank_definition(
         let event = event_by_id
             .get(event_id)
             .ok_or(BuildError::MissingEventDefinition)?;
+        validate_event_against_parameters(event, &parameter_by_id)?;
         events.push((*event).clone());
     }
 
@@ -435,8 +481,9 @@ pub enum ProjectExportBankError {
 mod tests {
     use camino::Utf8PathBuf;
     use sonara_model::{
-        AuthoringProject, EventContentRoot, EventId, EventKind, ParameterId, SamplerNode,
-        SequenceNode, SpatialMode, SwitchCase, SwitchNode,
+        AuthoringProject, EnumParameter, EventContentRoot, EventId, EventKind, Parameter,
+        ParameterId, ParameterScope, SamplerNode, SequenceNode, SpatialMode, SwitchCase,
+        SwitchNode,
     };
 
     use super::*;
@@ -705,6 +752,91 @@ mod tests {
         assert_eq!(package.events, vec![selected_event]);
         assert_eq!(package.buses, vec![bus]);
         assert_eq!(package.snapshots, vec![snapshot]);
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_missing_switch_parameter() {
+        let asset = make_asset("music_explore", StreamingMode::Streaming);
+        let switch_id = NodeId::new();
+        let sampler_id = NodeId::new();
+        let missing_parameter_id = ParameterId::new();
+        let event = make_event(
+            vec![
+                EventContentNode::Switch(SwitchNode {
+                    id: switch_id,
+                    parameter_id: missing_parameter_id,
+                    cases: vec![SwitchCase {
+                        variant: "explore".into(),
+                        child: NodeRef { id: sampler_id },
+                    }],
+                    default_case: Some(NodeRef { id: sampler_id }),
+                }),
+                EventContentNode::Sampler(SamplerNode {
+                    id: sampler_id,
+                    asset_id: asset.id,
+                }),
+            ],
+            switch_id,
+        );
+        let event_id = event.id;
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.events.push(event);
+
+        let mut definition = BankDefinition::new("music");
+        definition.events.push(event_id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingParameterDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_unknown_switch_variant() {
+        let asset = make_asset("music_explore", StreamingMode::Streaming);
+        let switch_id = NodeId::new();
+        let sampler_id = NodeId::new();
+        let parameter_id = ParameterId::new();
+        let event = make_event(
+            vec![
+                EventContentNode::Switch(SwitchNode {
+                    id: switch_id,
+                    parameter_id,
+                    cases: vec![SwitchCase {
+                        variant: "combat".into(),
+                        child: NodeRef { id: sampler_id },
+                    }],
+                    default_case: Some(NodeRef { id: sampler_id }),
+                }),
+                EventContentNode::Sampler(SamplerNode {
+                    id: sampler_id,
+                    asset_id: asset.id,
+                }),
+            ],
+            switch_id,
+        );
+        let event_id = event.id;
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.parameters.push(Parameter::Enum(EnumParameter {
+            id: parameter_id,
+            name: "music_state".into(),
+            scope: ParameterScope::Global,
+            default_value: "explore".into(),
+            variants: vec!["explore".into(), "stealth".into()],
+        }));
+        project.events.push(event);
+
+        let mut definition = BankDefinition::new("music");
+        definition.events.push(event_id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::UnknownSwitchVariant)
+        ));
     }
 
     #[test]

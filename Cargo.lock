@@ -5710,6 +5710,7 @@ dependencies = [
  "egui-chinese-font",
  "sonara-build",
  "sonara-model",
+ "uuid",
 ]
 
 [[package]]
