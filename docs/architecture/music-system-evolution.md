@@ -375,14 +375,18 @@ play(new_event)
     - `PlaybackTarget::Clip` 的初始播放
     - immediate 切换
     - bridge 完成后的目标 clip 接续
+    - `ResumeSlot` 的播放头回写
+    - `EntryPolicy::Resume` 的 offset 恢复
+    - `MemoryPolicy.ttl_seconds` 过期回退到 `reset_to`
   - 仍未完成：
-    - `ResumeSlot + MemoryPolicy`
     - 基于 cue 的自动等待与切换
     - `SyncDomain` 驱动的同步变体切换
 
 当前最接近的下一步：
 
-- 优先跑通功能 `[1]`：`ResumeSlot + MemoryPolicy + offset 恢复`
+- 补完整功能 `[1]` 的剩余边界：
+  - 长时间未播放时的重置策略在真实切换链上多测一轮
+  - 为 Bevy / 示例补可见演示路径
 - 再推进功能 `[2]`：基于用户 cue 的自动等待、退出和 bridge handoff
 - 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
 

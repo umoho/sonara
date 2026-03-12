@@ -20,13 +20,13 @@ use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
-    MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, PlaybackTarget,
-    ResumeSlot, Snapshot, SyncDomain,
+    MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
+    SyncDomain,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, MusicPhase,
-    MusicSessionId, MusicStatus, PlaybackPlan, RuntimeCommandBuffer, RuntimeError, RuntimeRequest,
-    RuntimeRequestResult, SonaraRuntime,
+    MusicSessionId, MusicStatus, PlaybackPlan, ResolvedMusicPlayback, RuntimeCommandBuffer,
+    RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -64,8 +64,6 @@ pub enum FirewheelBackendError {
     InvalidClipRange(ClipId),
     #[error("clip `{0:?}` 的子区间循环暂未接入 Firewheel sampler")]
     UnsupportedClipLoopRange(ClipId),
-    #[error("music session `{0:?}` 没有可播放的 clip")]
-    MusicSessionHasNoPlayableClip(MusicSessionId),
 }
 
 /// Firewheel backend 可消费的一条最小请求
@@ -392,6 +390,7 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
         target_state: MusicStateId,
     ) -> Result<(), FirewheelBackendError> {
+        self.save_music_session_resume_position(session_id)?;
         self.runtime.request_music_state(session_id, target_state)?;
         self.sync_music_session_playback(session_id)
     }
@@ -401,6 +400,7 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
+        self.save_music_session_resume_position(session_id)?;
         self.runtime.complete_music_exit(session_id)?;
         self.sync_music_session_playback(session_id)
     }
@@ -426,6 +426,7 @@ impl FirewheelBackend {
             ));
         }
 
+        self.save_music_session_resume_position(session_id)?;
         self.runtime.stop_music_session(session_id, fade)?;
         self.pending_music_playbacks.remove(&session_id);
         self.stop_music_session_workers(session_id);
@@ -556,6 +557,23 @@ impl FirewheelBackend {
     /// 并同时报告 worker 总数，供调用方决定是否需要更细粒度处理。
     pub fn instance_playhead(&self, instance_id: EventInstanceId) -> Option<InstancePlayhead> {
         let worker_ids = self.instance_workers.get(&instance_id)?;
+        let worker_id = *worker_ids.first()?;
+        let sample_rate = self.context.stream_info()?.sample_rate;
+        let update_instant = self.context.audio_clock_instant();
+        let state = self
+            .sampler_pool
+            .first_node_state::<SamplerState, _>(worker_id, &self.context)?;
+
+        Some(InstancePlayhead {
+            position_seconds: state
+                .playhead_seconds_corrected(update_instant, sample_rate)
+                .0,
+            worker_count: worker_ids.len(),
+        })
+    }
+
+    fn music_session_playhead(&self, session_id: MusicSessionId) -> Option<InstancePlayhead> {
+        let worker_ids = self.music_session_workers.get(&session_id)?;
         let worker_id = *worker_ids.first()?;
         let sample_rate = self.context.stream_info()?.sample_rate;
         let update_instant = self.context.audio_clock_instant();
@@ -711,7 +729,10 @@ impl FirewheelBackend {
             }
             MusicPhase::WaitingExitCue => {}
             MusicPhase::Stable | MusicPhase::PlayingBridge | MusicPhase::EnteringDestination => {
-                let clip_id = resolve_music_session_clip_id(&status)?;
+                let resolved_music = self
+                    .runtime
+                    .resolve_music_playback(session_id, self.audio_clock_seconds())?;
+                let clip_id = resolved_music.clip_id;
 
                 if self.active_music_clips.get(&session_id) == Some(&clip_id)
                     && self.music_session_workers.contains_key(&session_id)
@@ -720,7 +741,7 @@ impl FirewheelBackend {
                     return Ok(());
                 }
 
-                self.start_music_session_clip(session_id, clip_id)?;
+                self.start_music_session_clip(session_id, resolved_music)?;
             }
         }
 
@@ -730,9 +751,10 @@ impl FirewheelBackend {
     fn start_music_session_clip(
         &mut self,
         session_id: MusicSessionId,
-        clip_id: ClipId,
+        resolved_music: ResolvedMusicPlayback,
     ) -> Result<(), FirewheelBackendError> {
-        let resolved = self.resolve_clip_playback(clip_id)?;
+        let clip_id = resolved_music.clip_id;
+        let resolved = self.resolve_clip_playback(clip_id, resolved_music.entry_offset_seconds)?;
 
         if !self.prepare_asset_for_playback(resolved.asset_id)? {
             self.pending_music_playbacks
@@ -774,20 +796,23 @@ impl FirewheelBackend {
     fn resolve_clip_playback(
         &self,
         clip_id: ClipId,
+        entry_offset_seconds: f64,
     ) -> Result<ResolvedClipPlayback, FirewheelBackendError> {
         let clip = self
             .runtime
             .clip(clip_id)
             .ok_or(FirewheelBackendError::ClipNotLoaded(clip_id))?;
-        let start_from_seconds = clip
+        let clip_base_seconds = clip
             .source_range
             .map(|range| range.start_seconds as f64)
             .unwrap_or(0.0);
-        let start_from_seconds = validate_playback_position_seconds(start_from_seconds)?;
+        let clip_base_seconds = validate_playback_position_seconds(clip_base_seconds)?;
+        let entry_offset_seconds = validate_playback_position_seconds(entry_offset_seconds)?;
+        let start_from_seconds = clip_base_seconds + entry_offset_seconds;
 
         let stop_after_seconds = if let Some(range) = clip.source_range {
             let end_seconds = validate_playback_position_seconds(range.end_seconds as f64)?;
-            if end_seconds < start_from_seconds {
+            if end_seconds < clip_base_seconds {
                 return Err(FirewheelBackendError::InvalidClipRange(clip_id));
             }
 
@@ -1039,7 +1064,21 @@ impl FirewheelBackend {
             let Some(pending) = self.pending_music_playbacks.get(&session_id).copied() else {
                 continue;
             };
-            let resolved = self.resolve_clip_playback(pending.clip_id)?;
+            let resolved_music = self
+                .runtime
+                .resolve_music_playback(session_id, self.audio_clock_seconds())?;
+            if resolved_music.clip_id != pending.clip_id {
+                self.pending_music_playbacks.insert(
+                    session_id,
+                    PendingMusicPlayback {
+                        clip_id: resolved_music.clip_id,
+                    },
+                );
+            }
+            let resolved = self.resolve_clip_playback(
+                resolved_music.clip_id,
+                resolved_music.entry_offset_seconds,
+            )?;
 
             if !self.prepare_asset_for_playback(resolved.asset_id)? {
                 continue;
@@ -1048,7 +1087,8 @@ impl FirewheelBackend {
             self.pending_music_playbacks.remove(&session_id);
             self.stop_music_session_workers(session_id);
             self.play_music_clip_resolved(session_id, resolved)?;
-            self.active_music_clips.insert(session_id, pending.clip_id);
+            self.active_music_clips
+                .insert(session_id, resolved_music.clip_id);
         }
 
         Ok(())
@@ -1068,6 +1108,44 @@ impl FirewheelBackend {
             .entry(session_id)
             .or_default()
             .push(worker_id);
+    }
+
+    fn save_music_session_resume_position(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<bool, FirewheelBackendError> {
+        let Some(playhead) = self.music_session_playhead(session_id) else {
+            return Ok(false);
+        };
+        let Some(clip_id) = self.active_music_clips.get(&session_id).copied() else {
+            return Ok(false);
+        };
+        let clip_local_seconds =
+            self.clip_local_position_seconds(clip_id, playhead.position_seconds)?;
+        Ok(self.runtime.save_music_session_resume_position(
+            session_id,
+            clip_local_seconds,
+            self.audio_clock_seconds(),
+        )?)
+    }
+
+    fn clip_local_position_seconds(
+        &self,
+        clip_id: ClipId,
+        asset_position_seconds: f64,
+    ) -> Result<f64, FirewheelBackendError> {
+        let clip = self
+            .runtime
+            .clip(clip_id)
+            .ok_or(FirewheelBackendError::ClipNotLoaded(clip_id))?;
+        let clip_base_seconds = clip
+            .source_range
+            .map(|range| range.start_seconds as f64)
+            .unwrap_or(0.0);
+        let clip_base_seconds = validate_playback_position_seconds(clip_base_seconds)?;
+        let asset_position_seconds = validate_playback_position_seconds(asset_position_seconds)?;
+
+        Ok((asset_position_seconds - clip_base_seconds).max(0.0))
     }
 
     fn stop_event_instance_workers(&mut self, instance_id: EventInstanceId) {
@@ -1188,20 +1266,4 @@ fn validate_schedule_delay_seconds(seconds: f64) -> Result<f64, FirewheelBackend
     }
 
     Ok(seconds)
-}
-
-fn resolve_music_session_clip_id(status: &MusicStatus) -> Result<ClipId, FirewheelBackendError> {
-    if status.phase == MusicPhase::PlayingBridge {
-        return status
-            .pending_transition
-            .as_ref()
-            .and_then(|transition| transition.bridge_clip)
-            .ok_or(FirewheelBackendError::MusicSessionHasNoPlayableClip(
-                status.session_id,
-            ));
-    }
-
-    match status.current_target {
-        PlaybackTarget::Clip { clip_id } => Ok(clip_id),
-    }
 }

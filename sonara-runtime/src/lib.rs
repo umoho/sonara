@@ -109,6 +109,7 @@ pub struct ActiveMusicSession {
     pub graph_id: MusicGraphId,
     pub desired_state: MusicStateId,
     pub active_state: MusicStateId,
+    pub current_entry: EntryPolicy,
     pub phase: MusicPhase,
     pub pending_transition: Option<PendingMusicTransition>,
 }
@@ -123,6 +124,20 @@ pub struct MusicStatus {
     pub phase: MusicPhase,
     pub current_target: PlaybackTarget,
     pub pending_transition: Option<PendingMusicTransition>,
+}
+
+/// 一个记忆槽当前保存的播放头。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResumeMemoryEntry {
+    pub position_seconds: f64,
+    pub saved_at_seconds: f64,
+}
+
+/// 运行时为当前音乐会话解析出的播放目标。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMusicPlayback {
+    pub clip_id: ClipId,
+    pub entry_offset_seconds: f64,
 }
 
 /// 运行时可消费的一条最小请求
@@ -614,6 +629,7 @@ pub struct SonaraRuntime {
     emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
     active_instances: HashMap<EventInstanceId, ActiveEventInstance>,
     music_sessions: HashMap<MusicSessionId, ActiveMusicSession>,
+    resume_memories: HashMap<ResumeSlotId, ResumeMemoryEntry>,
     active_snapshots: HashMap<SnapshotInstanceId, ActiveSnapshotInstance>,
     next_event_instance_id: u64,
     next_music_session_id: u64,
@@ -711,6 +727,7 @@ impl SonaraRuntime {
 
         for resume_slot_id in &bank.resume_slots {
             self.resume_slots.remove(resume_slot_id);
+            self.resume_memories.remove(resume_slot_id);
         }
 
         for sync_domain_id in &bank.sync_domains {
@@ -764,6 +781,11 @@ impl SonaraRuntime {
         self.music_sessions.get(&session_id)
     }
 
+    /// 读取一个记忆槽当前保存的播放头。
+    pub fn resume_memory(&self, resume_slot_id: ResumeSlotId) -> Option<&ResumeMemoryEntry> {
+        self.resume_memories.get(&resume_slot_id)
+    }
+
     /// 启动一个音乐图会话，使用图中声明的初始状态。
     pub fn play_music_graph(
         &mut self,
@@ -783,6 +805,7 @@ impl SonaraRuntime {
             .get(&graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
         let active_state = resolve_music_graph_state(graph, initial_state)?;
+        let state = lookup_music_state(graph, active_state)?;
         let session_id = MusicSessionId(self.next_music_session_id);
         self.next_music_session_id += 1;
 
@@ -793,6 +816,7 @@ impl SonaraRuntime {
                 graph_id,
                 desired_state: active_state,
                 active_state,
+                current_entry: state.default_entry.clone(),
                 phase: MusicPhase::Stable,
                 pending_transition: None,
             },
@@ -849,6 +873,7 @@ impl SonaraRuntime {
 
         if transition.exit == ExitPolicy::Immediate && transition.bridge_clip.is_none() {
             session.active_state = target_state;
+            session.current_entry = transition.destination.clone();
             session.phase = MusicPhase::Stable;
             session.pending_transition = None;
             return Ok(());
@@ -892,9 +917,11 @@ impl SonaraRuntime {
             .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
 
         if pending.bridge_clip.is_some() {
+            session.current_entry = EntryPolicy::ClipStart;
             session.phase = MusicPhase::PlayingBridge;
         } else {
             session.active_state = pending.to_state;
+            session.current_entry = pending.destination.clone();
             session.phase = MusicPhase::Stable;
             session.pending_transition = None;
         }
@@ -926,6 +953,7 @@ impl SonaraRuntime {
             .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
 
         session.active_state = pending.to_state;
+        session.current_entry = pending.destination.clone();
         session.phase = MusicPhase::Stable;
         session.pending_transition = None;
         Ok(())
@@ -967,6 +995,148 @@ impl SonaraRuntime {
             current_target: state.target.clone(),
             pending_transition: session.pending_transition.clone(),
         })
+    }
+
+    /// 保存一个音乐会话当前状态对应的播放头到记忆槽。
+    ///
+    /// 只有当当前可听内容仍然对应 active state 时，才会写入记忆槽。
+    pub fn save_music_session_resume_position(
+        &mut self,
+        session_id: MusicSessionId,
+        position_seconds: f64,
+        saved_at_seconds: f64,
+    ) -> Result<bool, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+
+        if !position_seconds.is_finite()
+            || position_seconds < 0.0
+            || !saved_at_seconds.is_finite()
+            || saved_at_seconds < 0.0
+        {
+            return Ok(false);
+        }
+
+        if !matches!(
+            session.phase,
+            MusicPhase::Stable | MusicPhase::WaitingExitCue
+        ) {
+            return Ok(false);
+        }
+
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        let state = lookup_music_state(graph, session.active_state)?;
+        let Some(slot_id) = state.memory_slot else {
+            return Ok(false);
+        };
+
+        self.resume_memories.insert(
+            slot_id,
+            ResumeMemoryEntry {
+                position_seconds,
+                saved_at_seconds,
+            },
+        );
+        Ok(true)
+    }
+
+    /// 为当前音乐会话解析出真正应该播放的 clip 与入口偏移。
+    pub fn resolve_music_playback(
+        &self,
+        session_id: MusicSessionId,
+        now_seconds: f64,
+    ) -> Result<ResolvedMusicPlayback, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+
+        if session.phase == MusicPhase::PlayingBridge {
+            let clip_id = session
+                .pending_transition
+                .as_ref()
+                .and_then(|transition| transition.bridge_clip)
+                .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
+            return Ok(ResolvedMusicPlayback {
+                clip_id,
+                entry_offset_seconds: 0.0,
+            });
+        }
+
+        let state = lookup_music_state(graph, session.active_state)?;
+        let clip_id = match state.target {
+            PlaybackTarget::Clip { clip_id } => clip_id,
+        };
+        let entry_offset_seconds =
+            self.resolve_entry_offset_seconds(state, &session.current_entry, now_seconds);
+
+        Ok(ResolvedMusicPlayback {
+            clip_id,
+            entry_offset_seconds,
+        })
+    }
+
+    fn resolve_entry_offset_seconds(
+        &self,
+        state: &MusicStateNode,
+        entry_policy: &EntryPolicy,
+        now_seconds: f64,
+    ) -> f64 {
+        match entry_policy {
+            EntryPolicy::Resume => self
+                .resolve_resume_offset_seconds(state, now_seconds)
+                .unwrap_or_else(|| self.resolve_reset_entry_offset_seconds(state, now_seconds)),
+            EntryPolicy::ClipStart
+            | EntryPolicy::ResumeNextMatchingCue { .. }
+            | EntryPolicy::EntryCue { .. }
+            | EntryPolicy::SameSyncPosition => 0.0,
+        }
+    }
+
+    fn resolve_resume_offset_seconds(
+        &self,
+        state: &MusicStateNode,
+        now_seconds: f64,
+    ) -> Option<f64> {
+        let slot_id = state.memory_slot?;
+        let entry = self.resume_memories.get(&slot_id)?;
+        let ttl_seconds = state
+            .memory_policy
+            .ttl_seconds
+            .map(|ttl| ttl.max(0.0) as f64);
+
+        if let Some(ttl_seconds) = ttl_seconds {
+            if now_seconds.is_finite() && now_seconds >= 0.0 {
+                let age_seconds = (now_seconds - entry.saved_at_seconds).max(0.0);
+                if age_seconds > ttl_seconds {
+                    return None;
+                }
+            }
+        }
+
+        Some(entry.position_seconds.max(0.0))
+    }
+
+    fn resolve_reset_entry_offset_seconds(&self, state: &MusicStateNode, now_seconds: f64) -> f64 {
+        match &state.memory_policy.reset_to {
+            EntryPolicy::Resume => 0.0,
+            EntryPolicy::ClipStart
+            | EntryPolicy::ResumeNextMatchingCue { .. }
+            | EntryPolicy::EntryCue { .. }
+            | EntryPolicy::SameSyncPosition => {
+                let _ = now_seconds;
+                0.0
+            }
+        }
     }
 
     /// 创建一个新的 emitter
@@ -1903,6 +2073,202 @@ mod tests {
         assert_eq!(stable_status.desired_state, boss_state);
         assert_eq!(stable_status.phase, MusicPhase::Stable);
         assert!(stable_status.pending_transition.is_none());
+    }
+
+    #[test]
+    fn resolve_music_playback_uses_saved_resume_position_when_memory_is_fresh() {
+        let clip = Clip::new("explore_main", Uuid::now_v7());
+        let resume_slot = ResumeSlot::new("explore_memory");
+        let state_id = MusicStateId::new();
+        let mut graph = MusicGraph::new("world_music");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "explore".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy {
+                ttl_seconds: Some(30.0),
+                reset_to: EntryPolicy::ClipStart,
+            },
+            default_entry: EntryPolicy::Resume,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.resume_slots.push(resume_slot.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip.clone()],
+                vec![resume_slot.clone()],
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        assert!(
+            runtime
+                .save_music_session_resume_position(session_id, 12.5, 10.0)
+                .expect("resume save should succeed")
+        );
+
+        let resolved = runtime
+            .resolve_music_playback(session_id, 20.0)
+            .expect("music playback should resolve");
+
+        assert_eq!(resolved.clip_id, clip.id);
+        assert_eq!(resolved.entry_offset_seconds, 12.5);
+        assert_eq!(
+            runtime
+                .resume_memory(resume_slot.id)
+                .unwrap()
+                .position_seconds,
+            12.5
+        );
+    }
+
+    #[test]
+    fn resolve_music_playback_falls_back_to_clip_start_after_resume_ttl_expires() {
+        let clip = Clip::new("explore_main", Uuid::now_v7());
+        let resume_slot = ResumeSlot::new("explore_memory");
+        let state_id = MusicStateId::new();
+        let mut graph = MusicGraph::new("world_music");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "explore".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy {
+                ttl_seconds: Some(5.0),
+                reset_to: EntryPolicy::ClipStart,
+            },
+            default_entry: EntryPolicy::Resume,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.resume_slots.push(resume_slot.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip],
+                vec![resume_slot],
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        runtime
+            .save_music_session_resume_position(session_id, 9.0, 10.0)
+            .expect("resume save should succeed");
+
+        let resolved = runtime
+            .resolve_music_playback(session_id, 20.0)
+            .expect("music playback should resolve");
+
+        assert_eq!(resolved.entry_offset_seconds, 0.0);
+    }
+
+    #[test]
+    fn immediate_music_transition_uses_destination_resume_entry() {
+        let explore_clip = Clip::new("explore_main", Uuid::now_v7());
+        let combat_clip = Clip::new("combat_main", Uuid::now_v7());
+        let combat_memory = ResumeSlot::new("combat_memory");
+        let explore_state = MusicStateId::new();
+        let combat_state = MusicStateId::new();
+        let mut graph = MusicGraph::new("world_music");
+        graph.initial_state = Some(explore_state);
+        graph.states.push(MusicStateNode {
+            id: explore_state,
+            name: "explore".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: explore_clip.id,
+            },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: combat_state,
+            name: "combat".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: combat_clip.id,
+            },
+            memory_slot: Some(combat_memory.id),
+            memory_policy: MemoryPolicy {
+                ttl_seconds: Some(30.0),
+                reset_to: EntryPolicy::ClipStart,
+            },
+            default_entry: EntryPolicy::Resume,
+        });
+        graph.transitions.push(TransitionRule {
+            from: explore_state,
+            to: combat_state,
+            exit: ExitPolicy::Immediate,
+            bridge_clip: None,
+            destination: EntryPolicy::Resume,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.extend([explore_clip.id, combat_clip.id]);
+        bank.objects.resume_slots.push(combat_memory.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![explore_clip, combat_clip.clone()],
+                vec![combat_memory.clone()],
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        runtime.resume_memories.insert(
+            combat_memory.id,
+            ResumeMemoryEntry {
+                position_seconds: 18.0,
+                saved_at_seconds: 10.0,
+            },
+        );
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        runtime
+            .request_music_state(session_id, combat_state)
+            .expect("music state request should succeed");
+
+        let resolved = runtime
+            .resolve_music_playback(session_id, 20.0)
+            .expect("music playback should resolve");
+
+        assert_eq!(resolved.clip_id, combat_clip.id);
+        assert_eq!(resolved.entry_offset_seconds, 18.0);
     }
 
     #[test]
