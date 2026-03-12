@@ -274,7 +274,61 @@ play(new_event)
 - 查询并展示 `MusicStatus`
 - 不承载音乐切换状态机本体
 
-## 7. 分阶段演进计划
+## 7. 推荐依赖基线
+
+沿用 `ARCHITECTURE.md` 里的基础依赖之外，音乐演进阶段可优先复用的依赖：
+
+- `firewheel`
+  - 继续作为执行后端
+  - 阶段 2 优先启用 `scheduled_events` 和 `musical_transport`
+  - 直接复用 `schedule_event_for`、`sync_transport`、`audio_clock_instant`
+- `firewheel-pool`
+  - 继续作为 worker/pool 抽象
+  - 适合 persistent music session 持有和轮换 sampler worker
+- `firewheel-symphonium`
+  - 继续作为 Firewheel 与文件解码链之间的桥接
+  - 先复用现有 `load_audio_file` 路径，不要重新造一套加载器
+- `symphonium`
+  - 继续承担离线解码和重采样
+  - 适合 clip 裁切、波形缓存、预分析、导出前预处理
+- `symphonia`
+  - 继续作为更底层的 demux / codec 能力来源
+  - 如果后续需要更细粒度的媒体元数据或逐段解码，可直接下探
+- `hound`
+  - 继续用于测试 fixture、离线导出、波形校验
+  - 这类基础 PCM I/O 不值得自造
+- `petgraph`（可选）
+  - 适合 `MusicGraph` 的可达性校验、循环检测、编辑器图视图导出
+  - 不建议进入 runtime audio hot path
+- `rangemap`（可选）
+  - 适合索引 cue、loop、sync、TTL 生效区间这类时间范围数据
+  - 比手写区间查找更稳
+- `realfft` / `rustfft`（可选）
+  - 适合 editor 波形、频谱、瞬态候选、拍点候选分析
+  - 如果只处理实值音频输入，优先 `realfft`
+- `rubato`（可选）
+  - 适合离线重采样、sample-rate 对齐、同步变体导出前预处理
+  - 不建议先把它拉进 runtime 热路径
+- `creek`（可选）
+  - 如果后续证明“整文件 decode + 预热”不足以支撑大文件、低内存、局部循环 streaming，可评估引入
+  - 这一项应在 Firewheel 现有 sampler 能力摸清之后再决定
+- `ebur128`（可选）
+  - 适合 authoring 侧 loudness 扫描和归一化建议
+  - 对“不同 mp3 响度差异很大”的素材尤其有价值
+
+不建议重复造轮子的部分：
+
+- 音频线程精确定时事件调度
+- sampler 播放头查询、pause/resume、offset 起播
+- 动态 BPM / 共享 transport
+- 图结构可达性和循环校验
+- FFT / 频谱分析
+- 响度计量
+
+现阶段不建议额外引入一套并列音频引擎。
+本次演进应优先吃满 Firewheel 现有能力，只在确认 `Clip` 子区间循环或 streaming 能力不足时，再补可选依赖或自定义 node。
+
+## 8. 分阶段演进计划
 
 ### 阶段 0：能力验证 Spike
 
@@ -489,7 +543,7 @@ Stopped
 - `sonara-app`
 - 对应 demo 资产与编译导出流程
 
-## 8. `music_zone` 示例的迁移建议
+## 9. `music_zone` 示例的迁移建议
 
 当前 `music_zone` 的价值是：
 
@@ -512,7 +566,7 @@ Stopped
 - 在一个示例里混杂两套 API
 - 让现有最小音乐主线失去回归价值
 
-## 9. 测试与验证计划
+## 10. 测试与验证计划
 
 每个阶段都应补对应测试，而不是只靠 demo。
 
@@ -540,7 +594,7 @@ Stopped
   - session API 集成测试
   - HUD 状态反馈
 
-## 10. 关键风险
+## 11. 关键风险
 
 ### 10.1 backend 精度风险
 
@@ -578,7 +632,7 @@ Stopped
 
 建议严格按阶段推进。
 
-## 11. 结论
+## 12. 结论
 
 对 Sonara 来说，更合理的演进路线不是“把现有 `music_state` 参数继续做复杂”，而是：
 

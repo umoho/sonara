@@ -5,7 +5,8 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
-    Bank, BankId, Bus, Event, EventId, ParameterId, ParameterValue, Snapshot, SnapshotId,
+    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, ParameterId, ParameterValue, ResumeSlot,
+    Snapshot, SnapshotId, SyncDomain,
 };
 pub use sonara_runtime::EventInstanceState;
 use sonara_runtime::{
@@ -108,7 +109,16 @@ impl SonaraAudio {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<BankId, AudioBackendError> {
-        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+        self.load_bank_with_definitions(
+            bank,
+            events,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// 加载一个 bank 以及和它配套的高层对象定义。
@@ -118,15 +128,37 @@ impl SonaraAudio {
         events: Vec<Event>,
         buses: Vec<Bus>,
         snapshots: Vec<Snapshot>,
+        clips: Vec<Clip>,
+        resume_slots: Vec<ResumeSlot>,
+        sync_domains: Vec<SyncDomain>,
+        music_graphs: Vec<MusicGraph>,
     ) -> Result<BankId, AudioBackendError> {
         let bank_id = bank.id;
 
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
-                runtime.load_bank_with_definitions(bank, events, buses, snapshots)?;
+                runtime.load_bank_with_definitions(
+                    bank,
+                    events,
+                    buses,
+                    snapshots,
+                    clips,
+                    resume_slots,
+                    sync_domains,
+                    music_graphs,
+                )?;
             }
             SonaraBackend::Firewheel(backend) => {
-                backend.load_bank_with_definitions(bank, events, buses, snapshots)?;
+                backend.load_bank_with_definitions(
+                    bank,
+                    events,
+                    buses,
+                    snapshots,
+                    clips,
+                    resume_slots,
+                    sync_domains,
+                    music_graphs,
+                )?;
             }
         }
 
@@ -143,6 +175,10 @@ impl SonaraAudio {
             package.events,
             package.buses,
             package.snapshots,
+            package.clips,
+            package.resume_slots,
+            package.sync_domains,
+            package.music_graphs,
         )
     }
 

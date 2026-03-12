@@ -1012,9 +1012,16 @@ fn render_build_error(error: BuildError) -> String {
         BuildError::MissingEventDefinition => "Bank引用了不存在的事件".to_owned(),
         BuildError::MissingBusDefinition => "Bank引用了不存在的总线".to_owned(),
         BuildError::MissingSnapshotDefinition => "Bank引用了不存在的快照".to_owned(),
+        BuildError::MissingMusicGraphDefinition => "Bank引用了不存在的音乐图".to_owned(),
         BuildError::MissingParameterDefinition => "事件 switch 引用了不存在的参数".to_owned(),
         BuildError::SwitchParameterNotEnum => "事件 switch 必须绑定枚举参数".to_owned(),
         BuildError::UnknownSwitchVariant => "事件 switch 使用了参数中不存在的枚举值".to_owned(),
+        BuildError::EmptyMusicGraph => "音乐图必须至少包含一个状态".to_owned(),
+        BuildError::DuplicateMusicStateId => "音乐图中存在重复的状态 ID".to_owned(),
+        BuildError::MissingMusicStateDefinition => "音乐图引用了不存在的状态".to_owned(),
+        BuildError::MissingClipDefinition => "音乐图引用了不存在的片段".to_owned(),
+        BuildError::MissingResumeSlotDefinition => "音乐图引用了不存在的记忆槽".to_owned(),
+        BuildError::MissingSyncDomainDefinition => "片段引用了不存在的同步域".to_owned(),
     }
 }
 

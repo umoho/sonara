@@ -8,9 +8,11 @@ pub mod bank;
 pub mod bus;
 pub mod event;
 pub mod ids;
+pub mod music;
 pub mod parameter;
 pub mod project;
 pub mod snapshot;
+pub mod transport;
 
 pub use asset::{AnalysisMetadata, AudioAsset, ImportSettings, LoopRegion, StreamingMode};
 pub use bank::{Bank, BankAsset, BankDefinition, BankManifest, BankObjects};
@@ -19,10 +21,18 @@ pub use event::{
     Event, EventContentNode, EventContentRoot, EventKind, LeafNode, LoopNode, NodeId, NodeRef,
     RandomNode, SamplerNode, SequenceNode, SpatialMode, SwitchCase, SwitchNode,
 };
-pub use ids::{BankId, BusId, EventId, ParameterId, SnapshotId};
+pub use ids::{
+    BankId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicStateId, ParameterId, ResumeSlotId,
+    SnapshotId, SyncDomainId,
+};
+pub use music::{
+    EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph, MusicStateNode, PlaybackTarget,
+    TransitionRule,
+};
 pub use parameter::{
     BoolParameter, EnumParameter, FloatParameter, Parameter, ParameterDefaultValue, ParameterKind,
     ParameterScope, ParameterValue,
 };
 pub use project::{AuthoringProject, ProjectFileError};
 pub use snapshot::{Snapshot, SnapshotTarget};
+pub use transport::{Clip, CuePoint, ResumeSlot, SyncDomain, SyncPoint, TimeRange};

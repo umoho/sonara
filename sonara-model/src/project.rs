@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use thiserror::Error;
 
-use crate::{AudioAsset, BankDefinition, Bus, Event, Parameter, Snapshot};
+use crate::{
+    AudioAsset, BankDefinition, Bus, Clip, Event, MusicGraph, Parameter, ResumeSlot, Snapshot,
+    SyncDomain,
+};
 
 /// authoring 项目文件的最小 IO 错误。
 #[derive(Debug, Error)]
@@ -22,11 +25,25 @@ pub enum ProjectFileError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AuthoringProject {
     pub name: SmolStr,
+    #[serde(default)]
     pub assets: Vec<AudioAsset>,
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub resume_slots: Vec<ResumeSlot>,
+    #[serde(default)]
+    pub sync_domains: Vec<SyncDomain>,
+    #[serde(default)]
     pub parameters: Vec<Parameter>,
+    #[serde(default)]
     pub buses: Vec<Bus>,
+    #[serde(default)]
     pub snapshots: Vec<Snapshot>,
+    #[serde(default)]
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub music_graphs: Vec<MusicGraph>,
+    #[serde(default)]
     pub banks: Vec<BankDefinition>,
 }
 
@@ -36,10 +53,14 @@ impl AuthoringProject {
         Self {
             name: name.into(),
             assets: Vec::new(),
+            clips: Vec::new(),
+            resume_slots: Vec::new(),
+            sync_domains: Vec::new(),
             parameters: Vec::new(),
             buses: Vec::new(),
             snapshots: Vec::new(),
             events: Vec::new(),
+            music_graphs: Vec::new(),
             banks: Vec::new(),
         }
     }

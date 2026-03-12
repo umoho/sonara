@@ -18,8 +18,8 @@ use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
 use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
-    AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Event, EventId, ParameterId,
-    ParameterValue, Snapshot,
+    AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, Event, EventId, MusicGraph,
+    ParameterId, ParameterValue, ResumeSlot, Snapshot, SyncDomain,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, PlaybackPlan,
@@ -133,7 +133,16 @@ impl FirewheelBackend {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<(), FirewheelBackendError> {
-        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+        self.load_bank_with_definitions(
+            bank,
+            events,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// 加载一个 bank 以及和它配套的高层对象定义。
@@ -143,10 +152,22 @@ impl FirewheelBackend {
         events: Vec<Event>,
         buses: Vec<Bus>,
         snapshots: Vec<Snapshot>,
+        clips: Vec<Clip>,
+        resume_slots: Vec<ResumeSlot>,
+        sync_domains: Vec<SyncDomain>,
+        music_graphs: Vec<MusicGraph>,
     ) -> Result<(), FirewheelBackendError> {
         self.register_bank_manifest(&bank.manifest)?;
-        self.runtime
-            .load_bank_with_definitions(bank, events, buses, snapshots)?;
+        self.runtime.load_bank_with_definitions(
+            bank,
+            events,
+            buses,
+            snapshots,
+            clips,
+            resume_slots,
+            sync_domains,
+            music_graphs,
+        )?;
         Ok(())
     }
 
@@ -161,6 +182,10 @@ impl FirewheelBackend {
             package.events,
             package.buses,
             package.snapshots,
+            package.clips,
+            package.resume_slots,
+            package.sync_domains,
+            package.music_graphs,
         )?;
         Ok(bank_id)
     }

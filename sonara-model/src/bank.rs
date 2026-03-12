@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use uuid::Uuid;
 
-use crate::{BankId, BusId, EventId, ImportSettings, SnapshotId, StreamingMode};
+use crate::{
+    BankId, BusId, ClipId, EventId, ImportSettings, MusicGraphId, ResumeSlotId, SnapshotId,
+    StreamingMode, SyncDomainId,
+};
 
 /// authoring 层里的 bank 定义。
 ///
@@ -13,9 +16,14 @@ use crate::{BankId, BusId, EventId, ImportSettings, SnapshotId, StreamingMode};
 pub struct BankDefinition {
     pub id: BankId,
     pub name: SmolStr,
+    #[serde(default)]
     pub events: Vec<EventId>,
+    #[serde(default)]
     pub buses: Vec<BusId>,
+    #[serde(default)]
     pub snapshots: Vec<SnapshotId>,
+    #[serde(default)]
+    pub music_graphs: Vec<MusicGraphId>,
 }
 
 impl BankDefinition {
@@ -27,6 +35,7 @@ impl BankDefinition {
             events: Vec::new(),
             buses: Vec::new(),
             snapshots: Vec::new(),
+            music_graphs: Vec::new(),
         }
     }
 }
@@ -62,9 +71,20 @@ impl Default for BankManifest {
 /// compiled bank 中的高层对象清单。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BankObjects {
+    #[serde(default)]
     pub events: Vec<EventId>,
+    #[serde(default)]
     pub buses: Vec<BusId>,
+    #[serde(default)]
     pub snapshots: Vec<SnapshotId>,
+    #[serde(default)]
+    pub clips: Vec<ClipId>,
+    #[serde(default)]
+    pub resume_slots: Vec<ResumeSlotId>,
+    #[serde(default)]
+    pub sync_domains: Vec<SyncDomainId>,
+    #[serde(default)]
+    pub music_graphs: Vec<MusicGraphId>,
 }
 
 impl Default for BankObjects {
@@ -73,6 +93,10 @@ impl Default for BankObjects {
             events: Vec::new(),
             buses: Vec::new(),
             snapshots: Vec::new(),
+            clips: Vec::new(),
+            resume_slots: Vec::new(),
+            sync_domains: Vec::new(),
+            music_graphs: Vec::new(),
         }
     }
 }

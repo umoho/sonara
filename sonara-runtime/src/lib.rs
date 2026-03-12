@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 
 use sonara_model::{
-    Bank, BankId, BankObjects, BusId, Event, EventContentNode, EventId, NodeId, NodeRef,
-    ParameterId, ParameterValue, Snapshot, SnapshotId,
+    Bank, BankId, BankObjects, BusId, Clip, ClipId, EntryPolicy, Event, EventContentNode, EventId,
+    ExitPolicy, MusicGraph, MusicGraphId, MusicStateId, MusicStateNode, NodeId, NodeRef,
+    ParameterId, ParameterValue, PlaybackTarget, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId,
+    SyncDomain, SyncDomainId, TransitionRule,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -16,6 +18,10 @@ pub struct EventInstanceId(u64);
 /// 运行时 snapshot 实例 ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SnapshotInstanceId(u64);
+
+/// 运行时音乐会话 ID
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MusicSessionId(u64);
 
 /// 运行时 emitter ID
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,6 +80,49 @@ pub struct ActiveSnapshotInstance {
     pub snapshot_id: SnapshotId,
     pub fade: Fade,
     pub overrides: HashMap<BusId, f32>,
+}
+
+/// 音乐会话当前所处的逻辑阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MusicPhase {
+    Stable,
+    WaitingExitCue,
+    PlayingBridge,
+    EnteringDestination,
+    Stopped,
+}
+
+/// 一条等待完成的音乐状态切换。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingMusicTransition {
+    pub from_state: MusicStateId,
+    pub to_state: MusicStateId,
+    pub bridge_clip: Option<ClipId>,
+    pub exit: ExitPolicy,
+    pub destination: EntryPolicy,
+}
+
+/// 运行中的音乐会话。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveMusicSession {
+    pub id: MusicSessionId,
+    pub graph_id: MusicGraphId,
+    pub desired_state: MusicStateId,
+    pub active_state: MusicStateId,
+    pub phase: MusicPhase,
+    pub pending_transition: Option<PendingMusicTransition>,
+}
+
+/// 对游戏逻辑暴露的音乐会话状态快照。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MusicStatus {
+    pub session_id: MusicSessionId,
+    pub graph_id: MusicGraphId,
+    pub desired_state: MusicStateId,
+    pub active_state: MusicStateId,
+    pub phase: MusicPhase,
+    pub current_target: PlaybackTarget,
+    pub pending_transition: Option<PendingMusicTransition>,
 }
 
 /// 运行时可消费的一条最小请求
@@ -161,9 +210,21 @@ impl QueuedRuntime {
         events: Vec<Event>,
         buses: Vec<sonara_model::Bus>,
         snapshots: Vec<Snapshot>,
+        clips: Vec<Clip>,
+        resume_slots: Vec<ResumeSlot>,
+        sync_domains: Vec<SyncDomain>,
+        music_graphs: Vec<MusicGraph>,
     ) -> Result<BankId, RuntimeError> {
-        self.runtime
-            .load_bank_with_definitions(bank, events, buses, snapshots)
+        self.runtime.load_bank_with_definitions(
+            bank,
+            events,
+            buses,
+            snapshots,
+            clips,
+            resume_slots,
+            sync_domains,
+            music_graphs,
+        )
     }
 
     /// 播放一个未绑定 emitter 的事件。
@@ -232,6 +293,60 @@ impl QueuedRuntime {
     /// 查询一个事件实例当前对游戏侧可见的播放状态。
     pub fn instance_state(&self, instance_id: EventInstanceId) -> EventInstanceState {
         self.runtime.instance_state(instance_id)
+    }
+
+    /// 启动一个音乐图会话。
+    pub fn play_music_graph(
+        &mut self,
+        graph_id: MusicGraphId,
+    ) -> Result<MusicSessionId, RuntimeError> {
+        self.runtime.play_music_graph(graph_id)
+    }
+
+    /// 启动一个音乐图会话，并显式指定初始状态。
+    pub fn play_music_graph_in_state(
+        &mut self,
+        graph_id: MusicGraphId,
+        initial_state: Option<MusicStateId>,
+    ) -> Result<MusicSessionId, RuntimeError> {
+        self.runtime
+            .play_music_graph_in_state(graph_id, initial_state)
+    }
+
+    /// 请求一个音乐会话切换到目标状态。
+    pub fn request_music_state(
+        &mut self,
+        session_id: MusicSessionId,
+        target_state: MusicStateId,
+    ) -> Result<(), RuntimeError> {
+        self.runtime.request_music_state(session_id, target_state)
+    }
+
+    /// 通知运行时：会话已到达允许退出的切点。
+    pub fn complete_music_exit(&mut self, session_id: MusicSessionId) -> Result<(), RuntimeError> {
+        self.runtime.complete_music_exit(session_id)
+    }
+
+    /// 通知运行时：桥接片段已经结束。
+    pub fn complete_music_bridge(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), RuntimeError> {
+        self.runtime.complete_music_bridge(session_id)
+    }
+
+    /// 停止一个音乐会话。
+    pub fn stop_music_session(
+        &mut self,
+        session_id: MusicSessionId,
+        fade: Fade,
+    ) -> Result<(), RuntimeError> {
+        self.runtime.stop_music_session(session_id, fade)
+    }
+
+    /// 查询音乐会话当前状态。
+    pub fn music_status(&self, session_id: MusicSessionId) -> Result<MusicStatus, RuntimeError> {
+        self.runtime.music_status(session_id)
     }
 
     /// 取出当前待处理请求。
@@ -457,6 +572,31 @@ pub enum RuntimeError {
     SnapshotNotLoaded(SnapshotId),
     #[error("snapshot 引用了不存在的 bus `{0:?}`")]
     SnapshotTargetBusNotFound(BusId),
+    #[error("music graph `{0:?}` is not loaded")]
+    MusicGraphNotLoaded(MusicGraphId),
+    #[error("music graph `{0:?}` has no states")]
+    MusicGraphHasNoStates(MusicGraphId),
+    #[error("music graph `{graph_id:?}` has no state `{state_id:?}`")]
+    MusicStateNotFound {
+        graph_id: MusicGraphId,
+        state_id: MusicStateId,
+    },
+    #[error("music session `{0:?}` 不存在")]
+    MusicSessionNotFound(MusicSessionId),
+    #[error("music graph `{graph_id:?}` has no transition `{from:?} -> {to:?}`")]
+    MusicTransitionNotFound {
+        graph_id: MusicGraphId,
+        from: MusicStateId,
+        to: MusicStateId,
+    },
+    #[error("music session `{session_id:?}` expected phase `{expected:?}`, got `{actual:?}`")]
+    MusicSessionPhaseMismatch {
+        session_id: MusicSessionId,
+        expected: MusicPhase,
+        actual: MusicPhase,
+    },
+    #[error("music session `{0:?}` has no pending transition")]
+    MusicSessionHasNoPendingTransition(MusicSessionId),
 }
 
 /// 面向游戏逻辑的运行时入口
@@ -464,13 +604,19 @@ pub enum RuntimeError {
 pub struct SonaraRuntime {
     banks: HashMap<BankId, BankObjects>,
     events: HashMap<EventId, Event>,
+    clips: HashMap<ClipId, Clip>,
+    resume_slots: HashMap<ResumeSlotId, ResumeSlot>,
+    sync_domains: HashMap<SyncDomainId, SyncDomain>,
+    music_graphs: HashMap<MusicGraphId, MusicGraph>,
     snapshots: HashMap<SnapshotId, Snapshot>,
     bus_volumes: HashMap<BusId, f32>,
     global_parameters: HashMap<ParameterId, ParameterValue>,
     emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
     active_instances: HashMap<EventInstanceId, ActiveEventInstance>,
+    music_sessions: HashMap<MusicSessionId, ActiveMusicSession>,
     active_snapshots: HashMap<SnapshotInstanceId, ActiveSnapshotInstance>,
     next_event_instance_id: u64,
+    next_music_session_id: u64,
     next_snapshot_instance_id: u64,
     next_emitter_id: u64,
 }
@@ -483,7 +629,16 @@ impl SonaraRuntime {
 
     /// 加载一个 bank 和它包含的事件定义
     pub fn load_bank(&mut self, bank: Bank, events: Vec<Event>) -> Result<BankId, RuntimeError> {
-        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+        self.load_bank_with_definitions(
+            bank,
+            events,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// 加载一个 bank 以及和它配套的高层对象定义。
@@ -493,6 +648,10 @@ impl SonaraRuntime {
         events: Vec<Event>,
         buses: Vec<sonara_model::Bus>,
         snapshots: Vec<Snapshot>,
+        clips: Vec<Clip>,
+        resume_slots: Vec<ResumeSlot>,
+        sync_domains: Vec<SyncDomain>,
+        music_graphs: Vec<MusicGraph>,
     ) -> Result<BankId, RuntimeError> {
         let bank_id = bank.id;
         let bank_objects = bank.objects;
@@ -513,6 +672,22 @@ impl SonaraRuntime {
             self.snapshots.insert(snapshot.id, snapshot);
         }
 
+        for clip in clips {
+            self.clips.insert(clip.id, clip);
+        }
+
+        for resume_slot in resume_slots {
+            self.resume_slots.insert(resume_slot.id, resume_slot);
+        }
+
+        for sync_domain in sync_domains {
+            self.sync_domains.insert(sync_domain.id, sync_domain);
+        }
+
+        for music_graph in music_graphs {
+            self.music_graphs.insert(music_graph.id, music_graph);
+        }
+
         self.banks.insert(bank_id, bank_objects);
 
         Ok(bank_id)
@@ -530,8 +705,26 @@ impl SonaraRuntime {
             self.events.remove(event_id);
         }
 
+        for clip_id in &bank.clips {
+            self.clips.remove(clip_id);
+        }
+
+        for resume_slot_id in &bank.resume_slots {
+            self.resume_slots.remove(resume_slot_id);
+        }
+
+        for sync_domain_id in &bank.sync_domains {
+            self.sync_domains.remove(sync_domain_id);
+        }
+
+        for music_graph_id in &bank.music_graphs {
+            self.music_graphs.remove(music_graph_id);
+        }
+
         self.active_instances
             .retain(|_, instance| !event_ids.contains(&instance.event_id));
+        self.music_sessions
+            .retain(|_, session| !bank.music_graphs.contains(&session.graph_id));
 
         Ok(())
     }
@@ -544,6 +737,236 @@ impl SonaraRuntime {
     /// 读取某个已加载 bank 的对象清单。
     pub fn loaded_bank_objects(&self, bank_id: BankId) -> Option<&BankObjects> {
         self.banks.get(&bank_id)
+    }
+
+    /// 读取一个已加载的 clip 定义。
+    pub fn clip(&self, clip_id: ClipId) -> Option<&Clip> {
+        self.clips.get(&clip_id)
+    }
+
+    /// 读取一个已加载的记忆槽定义。
+    pub fn resume_slot(&self, resume_slot_id: ResumeSlotId) -> Option<&ResumeSlot> {
+        self.resume_slots.get(&resume_slot_id)
+    }
+
+    /// 读取一个已加载的同步域定义。
+    pub fn sync_domain(&self, sync_domain_id: SyncDomainId) -> Option<&SyncDomain> {
+        self.sync_domains.get(&sync_domain_id)
+    }
+
+    /// 读取一个已加载的音乐图定义。
+    pub fn music_graph(&self, music_graph_id: MusicGraphId) -> Option<&MusicGraph> {
+        self.music_graphs.get(&music_graph_id)
+    }
+
+    /// 读取一个运行中的音乐会话。
+    pub fn music_session(&self, session_id: MusicSessionId) -> Option<&ActiveMusicSession> {
+        self.music_sessions.get(&session_id)
+    }
+
+    /// 启动一个音乐图会话，使用图中声明的初始状态。
+    pub fn play_music_graph(
+        &mut self,
+        graph_id: MusicGraphId,
+    ) -> Result<MusicSessionId, RuntimeError> {
+        self.play_music_graph_in_state(graph_id, None)
+    }
+
+    /// 启动一个音乐图会话，并显式指定初始状态。
+    pub fn play_music_graph_in_state(
+        &mut self,
+        graph_id: MusicGraphId,
+        initial_state: Option<MusicStateId>,
+    ) -> Result<MusicSessionId, RuntimeError> {
+        let graph = self
+            .music_graphs
+            .get(&graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
+        let active_state = resolve_music_graph_state(graph, initial_state)?;
+        let session_id = MusicSessionId(self.next_music_session_id);
+        self.next_music_session_id += 1;
+
+        self.music_sessions.insert(
+            session_id,
+            ActiveMusicSession {
+                id: session_id,
+                graph_id,
+                desired_state: active_state,
+                active_state,
+                phase: MusicPhase::Stable,
+                pending_transition: None,
+            },
+        );
+
+        Ok(session_id)
+    }
+
+    /// 请求一个音乐会话切换到目标状态。
+    pub fn request_music_state(
+        &mut self,
+        session_id: MusicSessionId,
+        target_state: MusicStateId,
+    ) -> Result<(), RuntimeError> {
+        let (graph_id, active_state, phase) = {
+            let session = self
+                .music_sessions
+                .get(&session_id)
+                .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+            (session.graph_id, session.active_state, session.phase)
+        };
+
+        if phase == MusicPhase::Stopped {
+            return Err(RuntimeError::MusicSessionPhaseMismatch {
+                session_id,
+                expected: MusicPhase::Stable,
+                actual: phase,
+            });
+        }
+
+        let graph = self
+            .music_graphs
+            .get(&graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
+        lookup_music_state(graph, target_state)?;
+
+        if active_state == target_state {
+            let session = self
+                .music_sessions
+                .get_mut(&session_id)
+                .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+            session.desired_state = target_state;
+            session.phase = MusicPhase::Stable;
+            session.pending_transition = None;
+            return Ok(());
+        }
+
+        let transition = lookup_transition_rule(graph, active_state, target_state)?.clone();
+        let session = self
+            .music_sessions
+            .get_mut(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        session.desired_state = target_state;
+
+        if transition.exit == ExitPolicy::Immediate && transition.bridge_clip.is_none() {
+            session.active_state = target_state;
+            session.phase = MusicPhase::Stable;
+            session.pending_transition = None;
+            return Ok(());
+        }
+
+        let starts_with_bridge = matches!(transition.exit, ExitPolicy::Immediate);
+        session.pending_transition = Some(PendingMusicTransition {
+            from_state: active_state,
+            to_state: target_state,
+            bridge_clip: transition.bridge_clip,
+            exit: transition.exit,
+            destination: transition.destination,
+        });
+        session.phase = if starts_with_bridge {
+            MusicPhase::PlayingBridge
+        } else {
+            MusicPhase::WaitingExitCue
+        };
+
+        Ok(())
+    }
+
+    /// 通知运行时：当前会话已到达允许退出的切点。
+    pub fn complete_music_exit(&mut self, session_id: MusicSessionId) -> Result<(), RuntimeError> {
+        let session = self
+            .music_sessions
+            .get_mut(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+
+        if session.phase != MusicPhase::WaitingExitCue {
+            return Err(RuntimeError::MusicSessionPhaseMismatch {
+                session_id,
+                expected: MusicPhase::WaitingExitCue,
+                actual: session.phase,
+            });
+        }
+
+        let pending = session
+            .pending_transition
+            .clone()
+            .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
+
+        if pending.bridge_clip.is_some() {
+            session.phase = MusicPhase::PlayingBridge;
+        } else {
+            session.active_state = pending.to_state;
+            session.phase = MusicPhase::Stable;
+            session.pending_transition = None;
+        }
+
+        Ok(())
+    }
+
+    /// 通知运行时：桥接片段已经结束，可以进入目标状态。
+    pub fn complete_music_bridge(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), RuntimeError> {
+        let session = self
+            .music_sessions
+            .get_mut(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+
+        if session.phase != MusicPhase::PlayingBridge {
+            return Err(RuntimeError::MusicSessionPhaseMismatch {
+                session_id,
+                expected: MusicPhase::PlayingBridge,
+                actual: session.phase,
+            });
+        }
+
+        let pending = session
+            .pending_transition
+            .clone()
+            .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
+
+        session.active_state = pending.to_state;
+        session.phase = MusicPhase::Stable;
+        session.pending_transition = None;
+        Ok(())
+    }
+
+    /// 停止一个音乐会话。
+    pub fn stop_music_session(
+        &mut self,
+        session_id: MusicSessionId,
+        _fade: Fade,
+    ) -> Result<(), RuntimeError> {
+        let session = self
+            .music_sessions
+            .get_mut(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        session.phase = MusicPhase::Stopped;
+        session.pending_transition = None;
+        Ok(())
+    }
+
+    /// 读取音乐会话当前对游戏侧可见的状态。
+    pub fn music_status(&self, session_id: MusicSessionId) -> Result<MusicStatus, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        let state = lookup_music_state(graph, session.active_state)?;
+
+        Ok(MusicStatus {
+            session_id,
+            graph_id: session.graph_id,
+            desired_state: session.desired_state,
+            active_state: session.active_state,
+            phase: session.phase,
+            current_target: state.target.clone(),
+            pending_transition: session.pending_transition.clone(),
+        })
     }
 
     /// 创建一个新的 emitter
@@ -892,12 +1315,59 @@ impl SonaraRuntime {
     }
 }
 
+fn resolve_music_graph_state(
+    graph: &MusicGraph,
+    requested_state: Option<MusicStateId>,
+) -> Result<MusicStateId, RuntimeError> {
+    if let Some(state_id) = requested_state.or(graph.initial_state) {
+        lookup_music_state(graph, state_id)?;
+        return Ok(state_id);
+    }
+
+    graph
+        .states
+        .first()
+        .map(|state| state.id)
+        .ok_or(RuntimeError::MusicGraphHasNoStates(graph.id))
+}
+
+fn lookup_music_state(
+    graph: &MusicGraph,
+    state_id: MusicStateId,
+) -> Result<&MusicStateNode, RuntimeError> {
+    graph
+        .states
+        .iter()
+        .find(|state| state.id == state_id)
+        .ok_or(RuntimeError::MusicStateNotFound {
+            graph_id: graph.id,
+            state_id,
+        })
+}
+
+fn lookup_transition_rule(
+    graph: &MusicGraph,
+    from: MusicStateId,
+    to: MusicStateId,
+) -> Result<&TransitionRule, RuntimeError> {
+    graph
+        .transitions
+        .iter()
+        .find(|transition| transition.from == from && transition.to == to)
+        .ok_or(RuntimeError::MusicTransitionNotFound {
+            graph_id: graph.id,
+            from,
+            to,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
     use sonara_model::{
-        EventContentRoot, EventKind, SamplerNode, SequenceNode, Snapshot, SnapshotTarget,
-        SpatialMode, SwitchCase, SwitchNode,
+        EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
+        MusicStateId, MusicStateNode, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
+        Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TransitionRule,
     };
 
     use super::*;
@@ -1197,6 +1667,242 @@ mod tests {
             .expect("loaded bank objects should exist");
 
         assert_eq!(objects.events, vec![event_id]);
+    }
+
+    #[test]
+    fn load_bank_with_definitions_registers_music_foundation_objects() {
+        let asset_id = Uuid::now_v7();
+        let clip = Clip::new("explore_main", asset_id);
+        let resume_slot = ResumeSlot::new("explore_memory");
+        let sync_domain = SyncDomain::new("day_night");
+        let state_id = MusicStateId::new();
+        let mut graph = MusicGraph::new("world_music");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "explore".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.resume_slots.push(resume_slot.id);
+        bank.objects.sync_domains.push(sync_domain.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip.clone()],
+                vec![resume_slot.clone()],
+                vec![sync_domain.clone()],
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music definitions");
+
+        assert_eq!(runtime.clip(clip.id), Some(&clip));
+        assert_eq!(runtime.resume_slot(resume_slot.id), Some(&resume_slot));
+        assert_eq!(runtime.sync_domain(sync_domain.id), Some(&sync_domain));
+        assert_eq!(runtime.music_graph(graph.id), Some(&graph));
+    }
+
+    #[test]
+    fn unload_bank_removes_music_foundation_objects() {
+        let asset_id = Uuid::now_v7();
+        let clip = Clip::new("combat_main", asset_id);
+        let resume_slot = ResumeSlot::new("combat_memory");
+        let state_id = MusicStateId::new();
+        let mut graph = MusicGraph::new("combat_music");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "combat".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy {
+                ttl_seconds: Some(30.0),
+                reset_to: EntryPolicy::ClipStart,
+            },
+            default_entry: EntryPolicy::Resume,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.resume_slots.push(resume_slot.id);
+        bank.objects.music_graphs.push(graph.id);
+        let bank_id = bank.id;
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip.clone()],
+                vec![resume_slot.clone()],
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music definitions");
+
+        runtime.unload_bank(bank_id).expect("bank should unload");
+
+        assert_eq!(runtime.clip(clip.id), None);
+        assert_eq!(runtime.resume_slot(resume_slot.id), None);
+        assert_eq!(runtime.music_graph(graph.id), None);
+    }
+
+    #[test]
+    fn play_music_graph_uses_declared_initial_state() {
+        let asset_id = Uuid::now_v7();
+        let clip = Clip::new("explore_main", asset_id);
+        let explore_state = MusicStateId::new();
+        let combat_state = MusicStateId::new();
+        let mut graph = MusicGraph::new("world_music");
+        graph.initial_state = Some(combat_state);
+        graph.states.push(MusicStateNode {
+            id: explore_state,
+            name: "explore".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: combat_state,
+            name: "combat".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+
+        assert_eq!(status.active_state, combat_state);
+        assert_eq!(status.desired_state, combat_state);
+        assert_eq!(status.phase, MusicPhase::Stable);
+    }
+
+    #[test]
+    fn request_music_state_tracks_pending_transition_until_bridge_completes() {
+        let asset_id = Uuid::now_v7();
+        let clip = Clip::new("preheat_loop", asset_id);
+        let bridge_clip = Clip::new("transition", Uuid::now_v7());
+        let preheat_state = MusicStateId::new();
+        let boss_state = MusicStateId::new();
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(preheat_state);
+        graph.states.push(MusicStateNode {
+            id: preheat_state,
+            name: "preheat".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: boss_state,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.transitions.push(TransitionRule {
+            from: preheat_state,
+            to: boss_state,
+            exit: ExitPolicy::NextMatchingCue {
+                tag: "battle_ready".into(),
+            },
+            bridge_clip: Some(bridge_clip.id),
+            destination: EntryPolicy::EntryCue {
+                tag: "boss_in".into(),
+            },
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.clips.push(bridge_clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip.clone(), bridge_clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        runtime
+            .request_music_state(session_id, boss_state)
+            .expect("state request should succeed");
+
+        let waiting_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(waiting_status.active_state, preheat_state);
+        assert_eq!(waiting_status.desired_state, boss_state);
+        assert_eq!(waiting_status.phase, MusicPhase::WaitingExitCue);
+
+        runtime
+            .complete_music_exit(session_id)
+            .expect("exit cue completion should succeed");
+        let bridge_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(bridge_status.phase, MusicPhase::PlayingBridge);
+
+        runtime
+            .complete_music_bridge(session_id)
+            .expect("bridge completion should succeed");
+        let stable_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(stable_status.active_state, boss_state);
+        assert_eq!(stable_status.desired_state, boss_state);
+        assert_eq!(stable_status.phase, MusicPhase::Stable);
+        assert!(stable_status.pending_transition.is_none());
     }
 
     #[test]
