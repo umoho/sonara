@@ -330,7 +330,49 @@ play(new_event)
 
 ## 8. 分阶段演进计划
 
-### 阶段 0：能力验证 Spike
+### 当前坐标（截至 `d9600db`）
+
+- `阶段 0` 已完成
+  - 已确认 Firewheel 现成提供：
+    - `PlayFrom::Seconds / Resume`
+    - `SamplerState` 播放头读取
+    - `scheduled_events`
+    - `musical_transport`
+- `阶段 1` 已完成
+  - `model/build/runtime` 已引入并贯通：
+    - `Clip`
+    - `CuePoint`
+    - `ResumeSlot`
+    - `SyncDomain`
+    - `MusicGraph`
+- `阶段 2` 进行中
+  - 已完成：
+    - 打开 Firewheel 的 `scheduled_events` / `musical_transport`
+    - backend 播放头查询
+    - backend 立即 seek
+    - backend 延时 seek
+    - Bevy 侧播放头查询入口
+  - 未完成：
+    - `Clip` 直连播放路径
+    - `source_range / loop_range` 真正落到后端
+    - 非立即 fade / crossfade
+    - `schedule_handoff(...)`
+- `阶段 3` 已提前完成一部分逻辑骨架
+  - runtime 已有：
+    - `MusicSession`
+    - `PendingTransition`
+    - `MusicStatus`
+    - `Stable / WaitingExitCue / PlayingBridge / Stopped`
+  - 但还没有接上真实 backend 执行
+
+当前最接近的下一步：
+
+- 先补 `Clip` 直连播放
+- 再把 `MusicGraph -> MusicSession -> Firewheel transport` 真正接通
+- 优先跑通功能 `[1]`
+- 然后再推进功能 `[2]`
+
+### 阶段 0：能力验证 Spike（已完成）
 
 目标：
 
@@ -352,7 +394,19 @@ play(new_event)
 - 一份 backend 能力清单
 - 一份需要改造 `sonara-firewheel` 的结论
 
-### 阶段 1：Foundation 模型与编译产物
+当前结果：
+
+- 已验证 Firewheel 现成支持：
+  - 非零 offset 起播
+  - 播放头读取
+  - 未来时刻调度参数变更
+  - 共享 musical transport
+- 仍待确认或补足：
+  - `Clip` 子区间 loop
+  - 非立即 fade / handoff
+  - `Clip` 级别的直接播放路径
+
+### 阶段 1：Foundation 模型与编译产物（已完成）
 
 目标：
 
@@ -408,7 +462,14 @@ play(new_event)
   - `music_graphs`
   - 可选 `clips`
 
-### 阶段 2：Runtime / Backend Transport 基础
+当前结果：
+
+- 已完成 `sonara-model` 的 ID、schema、导出
+- 已完成 `sonara-build` 的 bank 编译、依赖校验、JSON round-trip
+- 已完成 `sonara-runtime` / `sonara-firewheel` / `sonara-bevy` 的装载链贯通
+- 当前仍保持现有 `Event` 路径兼容，未替换 `SamplerNode`
+
+### 阶段 2：Runtime / Backend Transport 基础（进行中）
 
 目标：
 
@@ -444,6 +505,24 @@ backend 侧新增：
 - 可以读取播放头
 - 可以 loop 指定区间
 - 可以做最小非即时 fade
+
+当前结果：
+
+- 已完成：
+  - Firewheel feature 打开：`scheduled_events`、`musical_transport`
+  - `sonara-firewheel` 已支持：
+    - `instance_playhead()`
+    - `seek_instance()`
+    - `seek_instance_after()`
+    - `audio_clock_seconds()`
+  - `sonara-bevy` 已支持：
+    - `instance_playhead_seconds()`
+- 未完成：
+  - `start_clip(asset_id, offset, loop_range)` 这一层明确 API
+  - `Clip.source_range / loop_range` 真正下沉到 backend
+  - 非即时 fade / crossfade
+  - `schedule_handoff(...)`
+  - runtime 里的 `ClipCursor / TransportStatus` 明确对象化
 
 ### 阶段 3：实现功能 `[1]` 和 `[2]`
 
@@ -486,6 +565,20 @@ Stopped
 - 而是：
   - `play_music_graph(...)`
   - `request_music_state(...)`
+
+当前结果：
+
+- runtime 逻辑骨架已提前落地：
+  - `play_music_graph(...)`
+  - `request_music_state(...)`
+  - `complete_music_exit(...)`
+  - `complete_music_bridge(...)`
+  - `music_status(...)`
+- 但这仍是逻辑状态机，不是端到端可听见的音乐切换
+- 本阶段真正完成的标志，仍然是：
+  - `MusicSession` 接到真实 backend
+  - 功能 `[1]` 能真实恢复进度
+  - 功能 `[2]` 能真实等待切点并完成 bridge handoff
 
 ### 阶段 4：实现功能 `[3]`
 
