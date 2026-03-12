@@ -330,7 +330,7 @@ play(new_event)
 
 ## 8. 分阶段演进计划
 
-### 当前坐标（截至 `d9600db`）
+### 当前坐标（截至当前分支工作区）
 
 - `阶段 0` 已完成
   - 已确认 Firewheel 现成提供：
@@ -352,25 +352,39 @@ play(new_event)
     - backend 立即 seek
     - backend 延时 seek
     - Bevy 侧播放头查询入口
+    - `Clip` 直连 Firewheel sampler 播放
+    - `source_range.start` 起播和 `source_range.end` 提前停播
+    - `MusicGraph -> MusicSession -> Clip` 的真实后端接线
   - 未完成：
-    - `Clip` 直连播放路径
-    - `source_range / loop_range` 真正落到后端
+    - `loop_range` 子区间循环
     - 非立即 fade / crossfade
     - `schedule_handoff(...)`
 - `阶段 3` 已提前完成一部分逻辑骨架
-  - runtime 已有：
+  - runtime / facade 已有：
     - `MusicSession`
     - `PendingTransition`
     - `MusicStatus`
     - `Stable / WaitingExitCue / PlayingBridge / Stopped`
-  - 但还没有接上真实 backend 执行
+    - `play_music_graph(...)`
+    - `request_music_state(...)`
+    - `complete_music_exit(...)`
+    - `complete_music_bridge(...)`
+    - `stop_music_session(...)`
+    - Bevy facade 的音乐会话 API
+  - 真实 backend 已接通：
+    - `PlaybackTarget::Clip` 的初始播放
+    - immediate 切换
+    - bridge 完成后的目标 clip 接续
+  - 仍未完成：
+    - `ResumeSlot + MemoryPolicy`
+    - 基于 cue 的自动等待与切换
+    - `SyncDomain` 驱动的同步变体切换
 
 当前最接近的下一步：
 
-- 先补 `Clip` 直连播放
-- 再把 `MusicGraph -> MusicSession -> Firewheel transport` 真正接通
-- 优先跑通功能 `[1]`
-- 然后再推进功能 `[2]`
+- 优先跑通功能 `[1]`：`ResumeSlot + MemoryPolicy + offset 恢复`
+- 再推进功能 `[2]`：基于用户 cue 的自动等待、退出和 bridge handoff
+- 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
 
 ### 阶段 0：能力验证 Spike（已完成）
 

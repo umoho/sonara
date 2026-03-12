@@ -5,14 +5,14 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
-    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, ParameterId, ParameterValue, ResumeSlot,
-    Snapshot, SnapshotId, SyncDomain,
+    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicStateId, ParameterId,
+    ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain,
 };
-pub use sonara_runtime::EventInstanceState;
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
+pub use sonara_runtime::{EventInstanceState, MusicPhase, MusicSessionId, MusicStatus};
 use thiserror::Error;
 
 /// Sonara 的默认 Bevy 插件入口。
@@ -392,6 +392,102 @@ impl SonaraAudio {
         }
     }
 
+    /// 启动一个音乐图会话，使用图中声明的初始状态。
+    pub fn play_music_graph(
+        &mut self,
+        graph_id: MusicGraphId,
+    ) -> Result<MusicSessionId, AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => Ok(runtime.play_music_graph(graph_id)?),
+            SonaraBackend::Firewheel(backend) => Ok(backend.play_music_graph(graph_id)?),
+        }
+    }
+
+    /// 启动一个音乐图会话，并显式指定初始状态。
+    pub fn play_music_graph_in_state(
+        &mut self,
+        graph_id: MusicGraphId,
+        initial_state: MusicStateId,
+    ) -> Result<MusicSessionId, AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                Ok(runtime.play_music_graph_in_state(graph_id, Some(initial_state))?)
+            }
+            SonaraBackend::Firewheel(backend) => {
+                Ok(backend.play_music_graph_in_state(graph_id, initial_state)?)
+            }
+        }
+    }
+
+    /// 请求一个音乐会话切换到目标状态。
+    pub fn request_music_state(
+        &mut self,
+        session_id: MusicSessionId,
+        target_state: MusicStateId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                runtime.request_music_state(session_id, target_state)?;
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.request_music_state(session_id, target_state)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 通知音乐会话：当前已经到达允许退出的切点。
+    pub fn complete_music_exit(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.complete_music_exit(session_id)?,
+            SonaraBackend::Firewheel(backend) => backend.complete_music_exit(session_id)?,
+        }
+
+        Ok(())
+    }
+
+    /// 通知音乐会话：桥接片段已经播放完成。
+    pub fn complete_music_bridge(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.complete_music_bridge(session_id)?,
+            SonaraBackend::Firewheel(backend) => backend.complete_music_bridge(session_id)?,
+        }
+
+        Ok(())
+    }
+
+    /// 停止一个音乐会话。
+    pub fn stop_music_session(
+        &mut self,
+        session_id: MusicSessionId,
+        fade: Fade,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.stop_music_session(session_id, fade)?,
+            SonaraBackend::Firewheel(backend) => backend.stop_music_session(session_id, fade)?,
+        }
+
+        Ok(())
+    }
+
+    /// 查询音乐会话当前对游戏侧可见的状态。
+    pub fn music_status(
+        &self,
+        session_id: MusicSessionId,
+    ) -> Result<MusicStatus, AudioBackendError> {
+        match &self.backend {
+            SonaraBackend::Runtime(runtime) => Ok(runtime.music_status(session_id)?),
+            SonaraBackend::Firewheel(backend) => Ok(backend.music_status(session_id)?),
+        }
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {
@@ -556,8 +652,9 @@ mod tests {
         system::Single,
     };
     use sonara_model::{
-        EventContentRoot, EventKind, NodeId, NodeRef, SamplerNode, SpatialMode, SwitchCase,
-        SwitchNode,
+        Clip, EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
+        MusicStateId, MusicStateNode, NodeId, NodeRef, PlaybackTarget, SamplerNode, SpatialMode,
+        SwitchCase, SwitchNode, TransitionRule,
     };
     use uuid::Uuid;
 
@@ -595,6 +692,56 @@ mod tests {
             voice_limit: None,
             steal_policy: None,
         }
+    }
+
+    fn make_music_graph() -> (Clip, Clip, Clip, MusicGraph, MusicStateId, MusicStateId) {
+        let preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
+        let bridge_clip = Clip::new("preheat_to_boss", Uuid::now_v7());
+        let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
+        let preheat_state = MusicStateId::new();
+        let boss_state = MusicStateId::new();
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(preheat_state);
+        graph.states.push(MusicStateNode {
+            id: preheat_state,
+            name: "preheat".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: preheat_clip.id,
+            },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: boss_state,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: boss_clip.id,
+            },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.transitions.push(TransitionRule {
+            from: preheat_state,
+            to: boss_state,
+            exit: ExitPolicy::NextMatchingCue {
+                tag: "battle_ready".into(),
+            },
+            bridge_clip: Some(bridge_clip.id),
+            destination: EntryPolicy::EntryCue {
+                tag: "boss_in".into(),
+            },
+        });
+
+        (
+            preheat_clip,
+            bridge_clip,
+            boss_clip,
+            graph,
+            preheat_state,
+            boss_state,
+        )
     }
 
     #[test]
@@ -888,5 +1035,101 @@ mod tests {
 
         assert_eq!(emitter_id, plan_emitter_id);
         assert_eq!(plan_asset_ids, vec![asset_id]);
+    }
+
+    #[test]
+    fn music_graph_api_tracks_transition_lifecycle_in_runtime_mode() {
+        let (preheat_clip, bridge_clip, boss_clip, graph, preheat_state, boss_state) =
+            make_music_graph();
+        let mut bank = Bank::new("music");
+        bank.objects
+            .clips
+            .extend([preheat_clip.id, bridge_clip.id, boss_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, bridge_clip, boss_clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("music bank should load");
+
+        let session_id = audio
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.active_state, preheat_state);
+        assert_eq!(status.phase, MusicPhase::Stable);
+
+        audio
+            .request_music_state(session_id, boss_state)
+            .expect("music state request should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.desired_state, boss_state);
+        assert_eq!(status.phase, MusicPhase::WaitingExitCue);
+
+        audio
+            .complete_music_exit(session_id)
+            .expect("exit cue completion should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.phase, MusicPhase::PlayingBridge);
+
+        audio
+            .complete_music_bridge(session_id)
+            .expect("bridge completion should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.active_state, boss_state);
+        assert_eq!(status.phase, MusicPhase::Stable);
+    }
+
+    #[test]
+    fn stop_music_session_marks_session_stopped() {
+        let (preheat_clip, bridge_clip, boss_clip, graph, _, _) = make_music_graph();
+        let mut bank = Bank::new("music");
+        bank.objects
+            .clips
+            .extend([preheat_clip.id, bridge_clip.id, boss_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, bridge_clip, boss_clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("music bank should load");
+
+        let session_id = audio
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        audio
+            .stop_music_session(session_id, Fade::IMMEDIATE)
+            .expect("stopping music session should succeed");
+
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.phase, MusicPhase::Stopped);
     }
 }
