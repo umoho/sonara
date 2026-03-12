@@ -380,6 +380,18 @@ impl SonaraAudio {
         }
     }
 
+    /// 读取一个事件实例当前的代表性播放头。
+    ///
+    /// 纯 runtime 模式没有真实音频后端，因此返回 `None`。
+    pub fn instance_playhead_seconds(&self, instance_id: EventInstanceId) -> Option<f64> {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => None,
+            SonaraBackend::Firewheel(backend) => backend
+                .instance_playhead(instance_id)
+                .map(|playhead| playhead.position_seconds),
+        }
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {

@@ -9,9 +9,10 @@ use std::{
 
 use firewheel::{
     FirewheelConfig, FirewheelContext,
+    clock::{DurationSeconds, EventInstant},
     collector::ArcGc,
     cpal::CpalConfig,
-    nodes::sampler::SamplerNode,
+    nodes::sampler::{PlayFrom, SamplerNode, SamplerState},
     sample_resource::{InterleavedResourceF32, SampleResource},
 };
 use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
@@ -51,6 +52,10 @@ pub enum FirewheelBackendError {
     NewWorker(#[from] NewWorkerError),
     #[error("Firewheel backend 暂不支持非立即 stop, fade={0} 秒")]
     UnsupportedFade(f32),
+    #[error("播放位置 `{0}` 必须是非负有限秒数")]
+    InvalidPlaybackPosition(f64),
+    #[error("调度延迟 `{0}` 必须是非负有限秒数")]
+    InvalidScheduleDelay(f64),
 }
 
 /// Firewheel backend 可消费的一条最小请求
@@ -62,6 +67,13 @@ pub type FirewheelRequestResult = RuntimeRequestResult;
 /// Firewheel backend 在隔离模式下处理单条请求后的结果
 pub type FirewheelRequestOutcome =
     AudioCommandOutcome<FirewheelRequest, FirewheelRequestResult, FirewheelBackendError>;
+
+/// 真实后端返回的一个实例播放头快照。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InstancePlayhead {
+    pub position_seconds: f64,
+    pub worker_count: usize,
+}
 
 /// 基于 Firewheel 的最小 one-shot 播放后端
 pub struct FirewheelBackend {
@@ -430,11 +442,94 @@ impl FirewheelBackend {
             .unwrap_or_default();
         for worker_id in worker_ids {
             self.worker_instances.remove(&worker_id);
-            self.sampler_pool.stop(worker_id, &mut self.context);
+            self.sampler_pool.stop(worker_id, None, &mut self.context);
         }
 
         self.update()?;
         Ok(())
+    }
+
+    /// 读取一个实例当前的代表性播放头。
+    ///
+    /// 如果这个实例绑定了多个 worker，则返回第一个 worker 的播放头，
+    /// 并同时报告 worker 总数，供调用方决定是否需要更细粒度处理。
+    pub fn instance_playhead(&self, instance_id: EventInstanceId) -> Option<InstancePlayhead> {
+        let worker_ids = self.instance_workers.get(&instance_id)?;
+        let worker_id = *worker_ids.first()?;
+        let sample_rate = self.context.stream_info()?.sample_rate;
+        let update_instant = self.context.audio_clock_instant();
+        let state = self
+            .sampler_pool
+            .first_node_state::<SamplerState, _>(worker_id, &self.context)?;
+
+        Some(InstancePlayhead {
+            position_seconds: state
+                .playhead_seconds_corrected(update_instant, sample_rate)
+                .0,
+            worker_count: worker_ids.len(),
+        })
+    }
+
+    /// 把一个实例当前所有 worker 的播放头同步到指定秒数。
+    pub fn seek_instance(
+        &mut self,
+        instance_id: EventInstanceId,
+        position_seconds: f64,
+    ) -> Result<bool, FirewheelBackendError> {
+        let position_seconds = validate_playback_position_seconds(position_seconds)?;
+        self.seek_instance_internal(instance_id, position_seconds, None)
+    }
+
+    /// 在未来音频时钟的某个时刻把实例播放头同步到指定秒数。
+    pub fn seek_instance_after(
+        &mut self,
+        instance_id: EventInstanceId,
+        position_seconds: f64,
+        delay_seconds: f64,
+    ) -> Result<bool, FirewheelBackendError> {
+        let position_seconds = validate_playback_position_seconds(position_seconds)?;
+        let delay_seconds = validate_schedule_delay_seconds(delay_seconds)?;
+        let start_time = Some(self.event_instant_after_seconds(delay_seconds));
+        self.seek_instance_internal(instance_id, position_seconds, start_time)
+    }
+
+    /// 读取当前修正后的音频时钟秒数。
+    pub fn audio_clock_seconds(&self) -> f64 {
+        self.context.audio_clock_corrected().seconds.0
+    }
+
+    fn seek_instance_internal(
+        &mut self,
+        instance_id: EventInstanceId,
+        position_seconds: f64,
+        start_time: Option<EventInstant>,
+    ) -> Result<bool, FirewheelBackendError> {
+        let worker_ids = self
+            .instance_workers
+            .get(&instance_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut changed = false;
+
+        for worker_id in worker_ids {
+            let Some(mut sampler) = self.sampler_pool.first_node(worker_id).cloned() else {
+                continue;
+            };
+
+            sampler.start_from(PlayFrom::Seconds(position_seconds));
+            changed |= self.sampler_pool.sync_worker_params(
+                worker_id,
+                &sampler,
+                start_time,
+                &mut self.context,
+            );
+        }
+
+        if changed {
+            self.update()?;
+        }
+
+        Ok(changed)
     }
 
     /// 推进 Firewheel 上下文
@@ -492,7 +587,7 @@ impl FirewheelBackend {
         let bus_volume = self.runtime.active_bus_volume(instance_id).unwrap_or(1.0);
 
         for asset_id in &plan.asset_ids {
-            self.play_asset(instance_id, *asset_id, bus_volume)?;
+            self.play_asset(instance_id, *asset_id, bus_volume, None, None)?;
         }
 
         self.update()?;
@@ -504,6 +599,8 @@ impl FirewheelBackend {
         instance_id: EventInstanceId,
         asset_id: Uuid,
         bus_volume: f32,
+        start_from_seconds: Option<f64>,
+        start_time: Option<EventInstant>,
     ) -> Result<(), FirewheelBackendError> {
         self.ensure_bank_asset_ready(asset_id)?;
         let resource = self
@@ -513,15 +610,27 @@ impl FirewheelBackend {
             .ok_or(FirewheelBackendError::AssetNotRegistered(asset_id))?;
         let mut sampler = SamplerNode::default();
         sampler.set_sample(resource);
-        sampler.start_or_restart();
+        if let Some(start_from_seconds) = start_from_seconds {
+            sampler.start_from(PlayFrom::Seconds(validate_playback_position_seconds(
+                start_from_seconds,
+            )?));
+        } else {
+            sampler.start_or_restart();
+        }
 
-        let worker =
-            self.sampler_pool
-                .new_worker(&sampler, true, &mut self.context, |fx_chain, cx| {
-                    let mut params = fx_chain.fx_chain.volume_pan;
-                    params.set_volume_linear(bus_volume);
-                    fx_chain.fx_chain.set_params(params, &fx_chain.node_ids, cx);
-                })?;
+        let worker = self.sampler_pool.new_worker(
+            &sampler,
+            start_time,
+            true,
+            &mut self.context,
+            |fx_chain, cx| {
+                let mut params = fx_chain.fx_chain.volume_pan;
+                params.set_volume_linear(bus_volume);
+                fx_chain
+                    .fx_chain
+                    .set_params(params, None, &fx_chain.node_ids, cx);
+            },
+        )?;
         self.attach_worker(instance_id, worker.worker_id);
 
         if let Some(old_worker_id) = worker.old_worker_id {
@@ -652,6 +761,12 @@ impl FirewheelBackend {
             }
         }
     }
+
+    fn event_instant_after_seconds(&self, delay_seconds: f64) -> EventInstant {
+        EventInstant::Seconds(
+            self.context.audio_clock_corrected().seconds + DurationSeconds(delay_seconds),
+        )
+    }
 }
 
 /// 根据 compiled bank manifest 决定资源是否需要在 startup 阶段预解码。
@@ -689,4 +804,20 @@ fn load_bank_asset_resource(asset: &BankAsset) -> Result<DecodedAudio, String> {
         symphonium::ResampleQuality::default(),
     )
     .map_err(|error| error.to_string())
+}
+
+fn validate_playback_position_seconds(seconds: f64) -> Result<f64, FirewheelBackendError> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(FirewheelBackendError::InvalidPlaybackPosition(seconds));
+    }
+
+    Ok(seconds)
+}
+
+fn validate_schedule_delay_seconds(seconds: f64) -> Result<f64, FirewheelBackendError> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(FirewheelBackendError::InvalidScheduleDelay(seconds));
+    }
+
+    Ok(seconds)
 }
