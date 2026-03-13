@@ -89,6 +89,13 @@ struct PendingMusicPlayback {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+struct PendingExitCue {
+    target_position_seconds: f64,
+    waiting_for_wrap: bool,
+    last_position_seconds: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolvedClipPlayback {
     asset_id: Uuid,
     start_from_seconds: f64,
@@ -105,6 +112,7 @@ pub struct FirewheelBackend {
     loading_streaming_assets: HashSet<Uuid>,
     pending_playbacks: HashMap<EventInstanceId, PlaybackPlan>,
     pending_music_playbacks: HashMap<MusicSessionId, PendingMusicPlayback>,
+    pending_exit_cues: HashMap<MusicSessionId, PendingExitCue>,
     sample_resources: HashMap<Uuid, ArcGc<dyn SampleResource>>,
     streaming_asset_tx: mpsc::Sender<StreamingAssetLoadResult>,
     streaming_asset_rx: mpsc::Receiver<StreamingAssetLoadResult>,
@@ -146,6 +154,7 @@ impl FirewheelBackend {
             loading_streaming_assets: HashSet::new(),
             pending_playbacks: HashMap::new(),
             pending_music_playbacks: HashMap::new(),
+            pending_exit_cues: HashMap::new(),
             sample_resources: HashMap::new(),
             streaming_asset_tx,
             streaming_asset_rx,
@@ -589,6 +598,23 @@ impl FirewheelBackend {
         })
     }
 
+    fn music_session_local_playhead(
+        &self,
+        session_id: MusicSessionId,
+    ) -> Result<Option<f64>, FirewheelBackendError> {
+        let Some(playhead) = self.music_session_playhead(session_id) else {
+            return Ok(None);
+        };
+        let Some(clip_id) = self.active_music_clips.get(&session_id).copied() else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.clip_local_position_seconds(
+            clip_id,
+            playhead.position_seconds,
+        )?))
+    }
+
     /// 把一个实例当前所有 worker 的播放头同步到指定秒数。
     pub fn seek_instance(
         &mut self,
@@ -663,6 +689,7 @@ impl FirewheelBackend {
         for worker_id in poll_result.finished_workers {
             self.finish_worker(worker_id);
         }
+        self.advance_waiting_exit_cues()?;
         Ok(())
     }
 
@@ -723,12 +750,18 @@ impl FirewheelBackend {
         match status.phase {
             MusicPhase::Stopped => {
                 self.pending_music_playbacks.remove(&session_id);
+                self.pending_exit_cues.remove(&session_id);
                 self.stop_music_session_workers(session_id);
                 self.active_music_clips.remove(&session_id);
                 self.update()?;
             }
-            MusicPhase::WaitingExitCue => {}
+            MusicPhase::WaitingExitCue => {
+                if !self.ensure_waiting_exit_cue(session_id)? {
+                    self.complete_music_exit(session_id)?;
+                }
+            }
             MusicPhase::Stable | MusicPhase::PlayingBridge | MusicPhase::EnteringDestination => {
+                self.pending_exit_cues.remove(&session_id);
                 let resolved_music = self
                     .runtime
                     .resolve_music_playback(session_id, self.audio_clock_seconds())?;
@@ -1089,6 +1122,83 @@ impl FirewheelBackend {
             self.play_music_clip_resolved(session_id, resolved)?;
             self.active_music_clips
                 .insert(session_id, resolved_music.clip_id);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_waiting_exit_cue(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<bool, FirewheelBackendError> {
+        if self.pending_exit_cues.contains_key(&session_id) {
+            return Ok(true);
+        }
+
+        let Some(current_position_seconds) = self.music_session_local_playhead(session_id)? else {
+            return Ok(true);
+        };
+        let Some(next_cue) = self
+            .runtime
+            .find_next_music_exit_cue(session_id, current_position_seconds)?
+        else {
+            return Ok(false);
+        };
+
+        self.pending_exit_cues.insert(
+            session_id,
+            PendingExitCue {
+                target_position_seconds: next_cue.cue_position_seconds,
+                waiting_for_wrap: next_cue.requires_wrap,
+                last_position_seconds: current_position_seconds,
+            },
+        );
+        Ok(true)
+    }
+
+    fn advance_waiting_exit_cues(&mut self) -> Result<(), FirewheelBackendError> {
+        let session_ids: Vec<_> = self.pending_exit_cues.keys().copied().collect();
+        let mut ready_sessions = Vec::new();
+        let epsilon = 0.010;
+
+        for session_id in session_ids {
+            let Some(mut pending) = self.pending_exit_cues.get(&session_id).copied() else {
+                continue;
+            };
+
+            let waiting = matches!(
+                self.runtime.music_status(session_id),
+                Ok(status) if status.phase == MusicPhase::WaitingExitCue
+            );
+            if !waiting {
+                self.pending_exit_cues.remove(&session_id);
+                continue;
+            }
+
+            let Some(current_position_seconds) = self.music_session_local_playhead(session_id)?
+            else {
+                continue;
+            };
+
+            if pending.waiting_for_wrap
+                && current_position_seconds + epsilon < pending.last_position_seconds
+            {
+                pending.waiting_for_wrap = false;
+            }
+
+            if !pending.waiting_for_wrap
+                && current_position_seconds + epsilon >= pending.target_position_seconds
+            {
+                ready_sessions.push(session_id);
+            } else {
+                pending.last_position_seconds = current_position_seconds;
+                self.pending_exit_cues.insert(session_id, pending);
+            }
+        }
+
+        for session_id in ready_sessions {
+            self.pending_exit_cues.remove(&session_id);
+            self.complete_music_exit(session_id)?;
         }
 
         Ok(())

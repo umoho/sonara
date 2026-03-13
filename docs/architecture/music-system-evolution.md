@@ -378,16 +378,21 @@ play(new_event)
     - `ResumeSlot` 的播放头回写
     - `EntryPolicy::Resume` 的 offset 恢复
     - `MemoryPolicy.ttl_seconds` 过期回退到 `reset_to`
+    - `WaitingExitCue` 的第一版自动等待
+    - `EntryPolicy::EntryCue` 的入口 cue 解析
   - 仍未完成：
-    - 基于 cue 的自动等待与切换
+    - 基于 cue 的更精确定时切换
+    - `ResumeNextMatchingCue`
     - `SyncDomain` 驱动的同步变体切换
 
 当前最接近的下一步：
 
-- 补完整功能 `[1]` 的剩余边界：
-  - 长时间未播放时的重置策略在真实切换链上多测一轮
-  - 为 Bevy / 示例补可见演示路径
-- 再推进功能 `[2]`：基于用户 cue 的自动等待、退出和 bridge handoff
+- 为 `[2]` 补一个最小可试听示例：
+  - loop 源段
+  - 用户 cue
+  - 到点后自动进入 bridge / 目标段
+- 在 backend 执行层补最小淡变
+- 再继续推进更精确的 cue 对拍与 handoff
 - 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
 
 ### 阶段 0：能力验证 Spike（已完成）

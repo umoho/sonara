@@ -140,6 +140,13 @@ pub struct ResolvedMusicPlayback {
     pub entry_offset_seconds: f64,
 }
 
+/// 一次“从当前位置往后找最近匹配 cue”后的解析结果。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NextCueMatch {
+    pub cue_position_seconds: f64,
+    pub requires_wrap: bool,
+}
+
 /// 运行时可消费的一条最小请求
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeRequest {
@@ -1085,6 +1092,42 @@ impl SonaraRuntime {
         })
     }
 
+    /// 为当前 waiting transition 解析下一个合法退出 cue。
+    pub fn find_next_music_exit_cue(
+        &self,
+        session_id: MusicSessionId,
+        current_position_seconds: f64,
+    ) -> Result<Option<NextCueMatch>, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let Some(pending) = &session.pending_transition else {
+            return Ok(None);
+        };
+        let ExitPolicy::NextMatchingCue { tag } = &pending.exit else {
+            return Ok(None);
+        };
+
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        let state = lookup_music_state(graph, session.active_state)?;
+        let clip_id = match state.target {
+            PlaybackTarget::Clip { clip_id } => clip_id,
+        };
+        let Some(clip) = self.clips.get(&clip_id) else {
+            return Ok(None);
+        };
+
+        Ok(find_next_matching_cue_in_clip(
+            clip,
+            tag,
+            current_position_seconds,
+        ))
+    }
+
     fn resolve_entry_offset_seconds(
         &self,
         state: &MusicStateNode,
@@ -1095,9 +1138,9 @@ impl SonaraRuntime {
             EntryPolicy::Resume => self
                 .resolve_resume_offset_seconds(state, now_seconds)
                 .unwrap_or_else(|| self.resolve_reset_entry_offset_seconds(state, now_seconds)),
+            EntryPolicy::EntryCue { tag } => self.resolve_entry_cue_offset_seconds(state, tag),
             EntryPolicy::ClipStart
             | EntryPolicy::ResumeNextMatchingCue { .. }
-            | EntryPolicy::EntryCue { .. }
             | EntryPolicy::SameSyncPosition => 0.0,
         }
     }
@@ -1137,6 +1180,22 @@ impl SonaraRuntime {
                 0.0
             }
         }
+    }
+
+    fn resolve_entry_cue_offset_seconds(&self, state: &MusicStateNode, tag: &str) -> f64 {
+        let clip_id = match state.target {
+            PlaybackTarget::Clip { clip_id } => clip_id,
+        };
+        let Some(clip) = self.clips.get(&clip_id) else {
+            return 0.0;
+        };
+
+        clip.cues
+            .iter()
+            .filter(|cue| cue.tags.iter().any(|candidate| candidate.as_str() == tag))
+            .map(|cue| cue.position_seconds.max(0.0) as f64)
+            .min_by(|left, right| left.total_cmp(right))
+            .unwrap_or(0.0)
     }
 
     /// 创建一个新的 emitter
@@ -1531,13 +1590,53 @@ fn lookup_transition_rule(
         })
 }
 
+fn find_next_matching_cue_in_clip(
+    clip: &Clip,
+    tag: &str,
+    current_position_seconds: f64,
+) -> Option<NextCueMatch> {
+    let current_position_seconds = if current_position_seconds.is_finite() {
+        current_position_seconds.max(0.0)
+    } else {
+        0.0
+    };
+
+    let mut matching_positions: Vec<f64> = clip
+        .cues
+        .iter()
+        .filter(|cue| cue.tags.iter().any(|candidate| candidate.as_str() == tag))
+        .map(|cue| cue.position_seconds.max(0.0) as f64)
+        .collect();
+    matching_positions.sort_by(|left, right| left.total_cmp(right));
+
+    if let Some(position) = matching_positions
+        .iter()
+        .copied()
+        .find(|position| *position >= current_position_seconds)
+    {
+        return Some(NextCueMatch {
+            cue_position_seconds: position,
+            requires_wrap: false,
+        });
+    }
+
+    let first_position = matching_positions.first().copied()?;
+    clip.loop_range.as_ref()?;
+
+    Some(NextCueMatch {
+        cue_position_seconds: first_position,
+        requires_wrap: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use smol_str::SmolStr;
     use sonara_model::{
-        EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
+        CuePoint, EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
         MusicStateId, MusicStateNode, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
-        Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TransitionRule,
+        Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TimeRange,
+        TransitionRule,
     };
 
     use super::*;
@@ -2269,6 +2368,143 @@ mod tests {
 
         assert_eq!(resolved.clip_id, combat_clip.id);
         assert_eq!(resolved.entry_offset_seconds, 18.0);
+    }
+
+    #[test]
+    fn resolve_music_playback_uses_entry_cue_offset() {
+        let mut clip = Clip::new("boss_loop", Uuid::now_v7());
+        let mut first = CuePoint::new("boss_intro", 4.0);
+        first.tags.push("boss_in".into());
+        let mut second = CuePoint::new("boss_intro_2", 9.0);
+        second.tags.push("boss_in".into());
+        clip.cues = vec![second, first];
+
+        let state_id = MusicStateId::new();
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::EntryCue {
+                tag: "boss_in".into(),
+            },
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let resolved = runtime
+            .resolve_music_playback(session_id, 0.0)
+            .expect("music playback should resolve");
+
+        assert_eq!(resolved.clip_id, clip.id);
+        assert_eq!(resolved.entry_offset_seconds, 4.0);
+    }
+
+    #[test]
+    fn find_next_music_exit_cue_prefers_current_cycle_then_wraps_looping_clip() {
+        let mut preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
+        preheat_clip.loop_range = Some(TimeRange::new(0.0, 12.0));
+        let mut cue_a = CuePoint::new("bar_1", 2.0);
+        cue_a.tags.push("battle_ready".into());
+        let mut cue_b = CuePoint::new("bar_2", 8.0);
+        cue_b.tags.push("battle_ready".into());
+        preheat_clip.cues = vec![cue_a, cue_b];
+
+        let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
+        let preheat_state = MusicStateId::new();
+        let boss_state = MusicStateId::new();
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(preheat_state);
+        graph.states.push(MusicStateNode {
+            id: preheat_state,
+            name: "preheat".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: preheat_clip.id,
+            },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: boss_state,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: boss_clip.id,
+            },
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.transitions.push(TransitionRule {
+            from: preheat_state,
+            to: boss_state,
+            exit: ExitPolicy::NextMatchingCue {
+                tag: "battle_ready".into(),
+            },
+            bridge_clip: None,
+            destination: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.extend([preheat_clip.id, boss_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, boss_clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        runtime
+            .request_music_state(session_id, boss_state)
+            .expect("state request should succeed");
+
+        let current_cycle = runtime
+            .find_next_music_exit_cue(session_id, 3.0)
+            .expect("cue lookup should succeed")
+            .expect("matching cue should exist");
+        assert_eq!(current_cycle.cue_position_seconds, 8.0);
+        assert!(!current_cycle.requires_wrap);
+
+        let next_cycle = runtime
+            .find_next_music_exit_cue(session_id, 9.0)
+            .expect("cue lookup should succeed")
+            .expect("matching cue should exist");
+        assert_eq!(next_cycle.cue_position_seconds, 2.0);
+        assert!(next_cycle.requires_wrap);
     }
 
     #[test]
