@@ -685,6 +685,7 @@ impl FirewheelBackend {
         self.drain_ready_streaming_assets();
         self.start_ready_pending_playbacks()?;
         self.start_ready_pending_music_playbacks()?;
+        self.refresh_waiting_exit_cues()?;
         let poll_result = self.sampler_pool.poll(&self.context);
         for worker_id in poll_result.finished_workers {
             self.finish_worker(worker_id);
@@ -1154,6 +1155,37 @@ impl FirewheelBackend {
             },
         );
         Ok(true)
+    }
+
+    fn refresh_waiting_exit_cues(&mut self) -> Result<(), FirewheelBackendError> {
+        let session_ids: HashSet<_> = self
+            .pending_exit_cues
+            .keys()
+            .chain(self.pending_music_playbacks.keys())
+            .chain(self.active_music_clips.keys())
+            .copied()
+            .collect();
+
+        for session_id in session_ids {
+            let waiting = matches!(
+                self.runtime.music_status(session_id),
+                Ok(status) if status.phase == MusicPhase::WaitingExitCue
+            );
+            if !waiting {
+                self.pending_exit_cues.remove(&session_id);
+                continue;
+            }
+
+            if self.pending_exit_cues.contains_key(&session_id) {
+                continue;
+            }
+
+            if !self.ensure_waiting_exit_cue(session_id)? {
+                self.complete_music_exit(session_id)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn advance_waiting_exit_cues(&mut self) -> Result<(), FirewheelBackendError> {

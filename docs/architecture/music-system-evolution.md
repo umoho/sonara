@@ -380,17 +380,25 @@ play(new_event)
     - `MemoryPolicy.ttl_seconds` 过期回退到 `reset_to`
     - `WaitingExitCue` 的第一版自动等待
     - `EntryPolicy::EntryCue` 的入口 cue 解析
+    - `[2]` 的按键触发试听 example
+      - 先播 `preheat`
+      - 用户触发后等待下一个合法 cue
+      - 然后进入 `bridge -> combat`
   - 仍未完成：
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`
     - `SyncDomain` 驱动的同步变体切换
 
+已知问题（暂不修复）：
+
+- 当前 `[2]` 的第一版实现中，如果在 `WaitingExitCue` 或 `PlayingBridge` 阶段反向请求状态切换，`sonara-firewheel` 可能出现音乐会话静音。
+  - 更可能的原因是旧 worker 完成回调与新 worker 挂载时序冲突，而不是 `MusicGraph` 状态机本身出错。
+  - 当前 MVP 先按《八方旅人》式语义处理：
+    - `WaitingExitCue` 和 `PlayingBridge` 视为锁定阶段
+    - example 层不再提供中途反向切换，而是通过重置会话回到 `preheat`
+
 当前最接近的下一步：
 
-- 为 `[2]` 补一个最小可试听示例：
-  - loop 源段
-  - 用户 cue
-  - 到点后自动进入 bridge / 目标段
 - 在 backend 执行层补最小淡变
 - 再继续推进更精确的 cue 对拍与 handoff
 - 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
