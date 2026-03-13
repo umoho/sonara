@@ -488,6 +488,22 @@ impl SonaraAudio {
         }
     }
 
+    /// 当前音乐会话是否还在等待媒体资源就绪。
+    pub fn music_session_pending_media(&self, session_id: MusicSessionId) -> bool {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => false,
+            SonaraBackend::Firewheel(backend) => backend.music_session_pending_media(session_id),
+        }
+    }
+
+    /// 读取音乐会话当前的代表性播放头秒数。
+    pub fn music_session_playhead_seconds(&self, session_id: MusicSessionId) -> Option<f64> {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => None,
+            SonaraBackend::Firewheel(backend) => backend.music_session_playhead_seconds(session_id),
+        }
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {

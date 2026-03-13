@@ -312,6 +312,8 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     let status = audio
         .music_status(session_id)
         .expect("music status should resolve for cue trigger");
+    let pending_media = audio.music_session_pending_media(session_id);
+    let playhead_seconds = audio.music_session_playhead_seconds(session_id);
 
     let phase_hint = match status.phase {
         MusicPhase::WaitingExitCue => "waiting for next battle_ready cue",
@@ -323,10 +325,19 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
 
     state.prompt_text = match status.phase {
         MusicPhase::Stable if status.active_state == state.preheat_state => {
-            "Press Space to trigger combat\nSonara will wait for the next battle_ready cue".into()
+            if pending_media {
+                "Loading music resources...\nYou can press Space early; Sonara will wait for the cue once playback starts".into()
+            } else {
+                "Press Space to trigger combat\nSonara will wait for the next battle_ready cue"
+                    .into()
+            }
         }
         MusicPhase::WaitingExitCue => {
-            "Combat requested\nWaiting for the next battle_ready cue...".into()
+            if pending_media {
+                "Combat requested\nWaiting for music media to become ready...".into()
+            } else {
+                "Combat requested\nWaiting for the next battle_ready cue...".into()
+            }
         }
         MusicPhase::PlayingBridge => {
             "Bridge playing...\nBoss music will enter after this clip".into()
@@ -339,11 +350,15 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     };
 
     state.hud_text = format!(
-        "Sonara music_cue_trigger\n\nGoal: hear [2] waiting for the next cue before switching\nPress R to reset the session back to preheat\nThis demo intentionally locks the transition once started\n\nactive_state: {}\ndesired_state: {}\nphase: {:?}\nhint: {}",
+        "Sonara music_cue_trigger\n\nGoal: hear [2] waiting for the next cue before switching\nPress R to reset the session back to preheat\nThis demo intentionally locks the transition once started\n\nactive_state: {}\ndesired_state: {}\nphase: {:?}\nhint: {}\nloading_media: {}\nplayhead_seconds: {}",
         state_label(status.active_state, state),
         state_label(status.desired_state, state),
         status.phase,
         phase_hint,
+        if pending_media { "yes" } else { "no" },
+        playhead_seconds
+            .map(|seconds| format!("{seconds:.2}"))
+            .unwrap_or_else(|| "n/a".into()),
     );
 }
 
