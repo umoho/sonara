@@ -14,7 +14,7 @@ use sonara_model::{
     AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Clip, ClipId, Event,
     EventContentNode, EventId, MusicGraph, MusicGraphId, NodeId, NodeRef, Parameter, ParameterId,
     ProjectFileError, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId, StreamingMode, SyncDomain,
-    SyncDomainId,
+    SyncDomainId, TrackId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -59,14 +59,20 @@ pub enum BuildError {
     EmptyMusicGraph,
     #[error("music graph 中存在重复 state ID")]
     DuplicateMusicStateId,
+    #[error("music graph 中存在重复 track ID")]
+    DuplicateTrackId,
     #[error("music graph 引用了不存在的 state")]
     MissingMusicStateDefinition,
+    #[error("music graph 引用了不存在的 track")]
+    MissingTrackDefinition,
     #[error("music graph 引用了不存在的 clip")]
     MissingClipDefinition,
     #[error("music graph 引用了不存在的 resume slot")]
     MissingResumeSlotDefinition,
     #[error("clip 引用了不存在的 sync domain")]
     MissingSyncDomainDefinition,
+    #[error("music state 中存在重复 track binding")]
+    DuplicateTrackBinding,
 }
 
 /// compiled bank 文件的最小 IO 错误。
@@ -630,7 +636,14 @@ fn validate_music_graph(
     }
 
     let mut state_ids = HashSet::new();
+    let mut track_ids = HashSet::new();
     let mut dependencies = MusicGraphDependencies::default();
+
+    for track in &graph.tracks {
+        if !track_ids.insert(track.id) {
+            return Err(BuildError::DuplicateTrackId);
+        }
+    }
 
     for state in &graph.states {
         if !state_ids.insert(state.id) {
@@ -655,6 +668,30 @@ fn validate_music_graph(
                     return Err(BuildError::MissingSyncDomainDefinition);
                 }
                 push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+            }
+        }
+
+        let mut state_binding_track_ids = HashSet::<TrackId>::new();
+        for binding in &state.bindings {
+            if !track_ids.contains(&binding.track_id) {
+                return Err(BuildError::MissingTrackDefinition);
+            }
+            if !state_binding_track_ids.insert(binding.track_id) {
+                return Err(BuildError::DuplicateTrackBinding);
+            }
+
+            for clip_id in binding.target.clip_ids() {
+                let clip = clip_by_id
+                    .get(&clip_id)
+                    .ok_or(BuildError::MissingClipDefinition)?;
+                push_unique(&mut dependencies.clip_ids, clip_id);
+
+                if let Some(sync_domain_id) = clip.sync_domain {
+                    if !sync_domain_by_id.contains_key(&sync_domain_id) {
+                        return Err(BuildError::MissingSyncDomainDefinition);
+                    }
+                    push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+                }
             }
         }
     }
@@ -756,7 +793,7 @@ mod tests {
         AuthoringProject, Clip, EntryPolicy, EnumParameter, EventContentRoot, EventId, EventKind,
         ExitPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode, Parameter, ParameterId,
         ParameterScope, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode, SpatialMode,
-        SwitchCase, SwitchNode, SyncDomain, TransitionRule,
+        SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackRole, TransitionRule,
     };
 
     use super::*;
@@ -1205,6 +1242,7 @@ mod tests {
             id: state_id,
             name: "boss".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(12.0),
@@ -1261,6 +1299,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: missing_clip_id,
             },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -1276,6 +1315,41 @@ mod tests {
         assert!(matches!(
             compile_bank_definition(&definition, &project),
             Err(BuildError::MissingClipDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_music_graph_binding_missing_track() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let state_id = MusicStateId::new();
+        let missing_track_id = Track::new("main", TrackRole::Main).id;
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_state = Some(state_id);
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: vec![TrackBinding {
+                track_id: missing_track_id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingTrackDefinition)
         ));
     }
 

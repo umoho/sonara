@@ -903,6 +903,99 @@ GameAudioProject
 - 现阶段不是“设计整个世界”
 - 而是“在已有骨架上补 `Track` 这一层”
 
+### 1.4 Track 的最小数据结构草案
+
+按当前阶段的范围控制，`Track` 不宜一上来就做成完整 DAW 时间线，也不宜先扩出过多控制字段。更合适的第一版是：
+
+```text
+TrackId
+TrackRole
+Track
+TrackBinding
+```
+
+推荐最小结构：
+
+```rust
+struct Track {
+    id: TrackId,
+    name: SmolStr,
+    role: TrackRole,
+}
+```
+
+```rust
+enum TrackRole {
+    Main,
+    Bridge,
+    Stinger,
+    Layer,
+}
+```
+
+```rust
+struct TrackBinding {
+    track_id: TrackId,
+    target: PlaybackTarget,
+}
+```
+
+设计原则：
+
+- `Track` 先只表达“播放层身份”
+- `TrackBinding` 先只表达“哪条 Track 播什么”
+- 暂时不加：
+  - `gain`
+  - `mute`
+  - `priority`
+  - `output_bus`
+  - `automation`
+  - `lane`
+  - `clip placement`
+
+推荐挂载位置：
+
+- `MusicGraph`
+  - 新增：
+    - `tracks: Vec<Track>`
+- `MusicStateNode`
+  - 当前的单个 `target`
+  - 演进为：
+    - `bindings: Vec<TrackBinding>`
+
+兼容策略：
+
+- 默认每个 `MusicGraph` 都拥有一条隐式 `main` track
+- 现有的：
+  - `MusicStateNode.target`
+  语义上等价为：
+  - `bindings = [ main -> target ]`
+- 因此第一阶段可以做到：
+  - 不破坏已有 `[1][2]` 主线
+  - 先在模型层建立多轨扩展点
+
+这版最小结构的目标不是立即覆盖所有高级用法，而是先为后续三类能力预留位置：
+
+- `Bridge`
+  - 承载 `[2]` 的过渡段
+- `Stinger`
+  - 承载切换时同步叠加的一次性音效/短乐句
+- `Layer`
+  - 承载 `[3]` 中的分层配器 / stem / 变体
+
+后续建议顺序：
+
+1. 先引入：
+   - `Track`
+   - `TrackBinding`
+2. 再扩：
+   - `TransitionRule.stinger`
+   - `stinger_timing`
+3. 最后再扩：
+   - `SyncVariantSet`
+   - `StemSet`
+   - 更完整的 `PlaybackTarget`
+
 ### 阶段 2：Runtime / Backend Transport 基础（进行中）
 
 目标：

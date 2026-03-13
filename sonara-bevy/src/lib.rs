@@ -724,6 +724,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: preheat_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -734,6 +735,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: boss_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,

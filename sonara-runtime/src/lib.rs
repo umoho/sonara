@@ -999,7 +999,7 @@ impl SonaraRuntime {
             desired_state: session.desired_state,
             active_state: session.active_state,
             phase: session.phase,
-            current_target: state.target.clone(),
+            current_target: state.primary_target(graph).clone(),
             pending_transition: session.pending_transition.clone(),
         })
     }
@@ -1080,14 +1080,14 @@ impl SonaraRuntime {
         }
 
         let state = lookup_music_state(graph, session.active_state)?;
-        let clip_id = match state.target {
+        let clip_id = match state.primary_target(graph) {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
         let entry_offset_seconds =
-            self.resolve_entry_offset_seconds(state, &session.current_entry, now_seconds);
+            self.resolve_entry_offset_seconds(state, graph, &session.current_entry, now_seconds);
 
         Ok(ResolvedMusicPlayback {
-            clip_id,
+            clip_id: *clip_id,
             entry_offset_seconds,
         })
     }
@@ -1114,7 +1114,7 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_state(graph, session.active_state)?;
-        let clip_id = match state.target {
+        let clip_id = match state.primary_target(graph) {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
         let Some(clip) = self.clips.get(&clip_id) else {
@@ -1131,14 +1131,19 @@ impl SonaraRuntime {
     fn resolve_entry_offset_seconds(
         &self,
         state: &MusicStateNode,
+        graph: &MusicGraph,
         entry_policy: &EntryPolicy,
         now_seconds: f64,
     ) -> f64 {
         match entry_policy {
             EntryPolicy::Resume => self
                 .resolve_resume_offset_seconds(state, now_seconds)
-                .unwrap_or_else(|| self.resolve_reset_entry_offset_seconds(state, now_seconds)),
-            EntryPolicy::EntryCue { tag } => self.resolve_entry_cue_offset_seconds(state, tag),
+                .unwrap_or_else(|| {
+                    self.resolve_reset_entry_offset_seconds(state, graph, now_seconds)
+                }),
+            EntryPolicy::EntryCue { tag } => {
+                self.resolve_entry_cue_offset_seconds(state, graph, tag)
+            }
             EntryPolicy::ClipStart
             | EntryPolicy::ResumeNextMatchingCue { .. }
             | EntryPolicy::SameSyncPosition => 0.0,
@@ -1169,21 +1174,33 @@ impl SonaraRuntime {
         Some(entry.position_seconds.max(0.0))
     }
 
-    fn resolve_reset_entry_offset_seconds(&self, state: &MusicStateNode, now_seconds: f64) -> f64 {
+    fn resolve_reset_entry_offset_seconds(
+        &self,
+        state: &MusicStateNode,
+        graph: &MusicGraph,
+        now_seconds: f64,
+    ) -> f64 {
         match &state.memory_policy.reset_to {
             EntryPolicy::Resume => 0.0,
             EntryPolicy::ClipStart
             | EntryPolicy::ResumeNextMatchingCue { .. }
-            | EntryPolicy::EntryCue { .. }
             | EntryPolicy::SameSyncPosition => {
                 let _ = now_seconds;
                 0.0
             }
+            EntryPolicy::EntryCue { tag } => {
+                self.resolve_entry_cue_offset_seconds(state, graph, tag)
+            }
         }
     }
 
-    fn resolve_entry_cue_offset_seconds(&self, state: &MusicStateNode, tag: &str) -> f64 {
-        let clip_id = match state.target {
+    fn resolve_entry_cue_offset_seconds(
+        &self,
+        state: &MusicStateNode,
+        graph: &MusicGraph,
+        tag: &str,
+    ) -> f64 {
+        let clip_id = match state.primary_target(graph) {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
         let Some(clip) = self.clips.get(&clip_id) else {
@@ -1636,7 +1653,7 @@ mod tests {
         CuePoint, EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
         MusicStateId, MusicStateNode, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
         Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TimeRange,
-        TransitionRule,
+        Track, TrackBinding, TrackRole, TransitionRule,
     };
 
     use super::*;
@@ -1951,6 +1968,7 @@ mod tests {
             id: state_id,
             name: "explore".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -1994,6 +2012,7 @@ mod tests {
             id: state_id,
             name: "combat".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2041,6 +2060,7 @@ mod tests {
             id: explore_state,
             name: "explore".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2049,6 +2069,7 @@ mod tests {
             id: combat_state,
             name: "combat".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2097,6 +2118,7 @@ mod tests {
             id: preheat_state,
             name: "preheat".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2105,6 +2127,7 @@ mod tests {
             id: boss_state,
             name: "boss".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2185,6 +2208,7 @@ mod tests {
             id: state_id,
             name: "explore".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2247,6 +2271,7 @@ mod tests {
             id: state_id,
             name: "explore".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(5.0),
@@ -2303,6 +2328,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: explore_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2313,6 +2339,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: combat_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: Some(combat_memory.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2386,6 +2413,7 @@ mod tests {
             id: state_id,
             name: "boss".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::EntryCue {
@@ -2423,6 +2451,69 @@ mod tests {
     }
 
     #[test]
+    fn explicit_main_track_binding_overrides_legacy_music_target() {
+        let legacy_clip = Clip::new("legacy_main", Uuid::now_v7());
+        let main_clip = Clip::new("explicit_main", Uuid::now_v7());
+        let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(state_id);
+        graph.tracks.push(main_track.clone());
+        graph.states.push(MusicStateNode {
+            id: state_id,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: legacy_clip.id,
+            },
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: main_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.extend([legacy_clip.id, main_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![legacy_clip, main_clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with explicit main track");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        let resolved = runtime
+            .resolve_music_playback(session_id, 0.0)
+            .expect("music playback should resolve");
+
+        assert_eq!(
+            status.current_target,
+            PlaybackTarget::Clip {
+                clip_id: main_clip.id,
+            }
+        );
+        assert_eq!(resolved.clip_id, main_clip.id);
+    }
+
+    #[test]
     fn find_next_music_exit_cue_prefers_current_cycle_then_wraps_looping_clip() {
         let mut preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
         preheat_clip.loop_range = Some(TimeRange::new(0.0, 12.0));
@@ -2443,6 +2534,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: preheat_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2453,6 +2545,7 @@ mod tests {
             target: PlaybackTarget::Clip {
                 clip_id: boss_clip.id,
             },
+            bindings: Vec::new(),
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,

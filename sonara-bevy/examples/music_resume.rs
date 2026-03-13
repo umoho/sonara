@@ -96,6 +96,7 @@ fn setup_scene(
         target: PlaybackTarget::Clip {
             clip_id: explore_clip.id,
         },
+        bindings: Vec::new(),
         memory_slot: Some(explore_slot.id),
         memory_policy: MemoryPolicy {
             ttl_seconds: Some(RESUME_TTL_SECONDS),
@@ -109,6 +110,7 @@ fn setup_scene(
         target: PlaybackTarget::Clip {
             clip_id: combat_clip.id,
         },
+        bindings: Vec::new(),
         memory_slot: Some(combat_slot.id),
         memory_policy: MemoryPolicy {
             ttl_seconds: Some(RESUME_TTL_SECONDS),
