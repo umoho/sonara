@@ -383,7 +383,6 @@ impl FirewheelBackend {
         graph_id: MusicGraphId,
     ) -> Result<MusicSessionId, FirewheelBackendError> {
         let session_id = self.runtime.play_music_graph(graph_id)?;
-        self.debug_music_session("play_music_graph", session_id);
         self.sync_music_session_playback(session_id)?;
         Ok(session_id)
     }
@@ -397,7 +396,6 @@ impl FirewheelBackend {
         let session_id = self
             .runtime
             .play_music_graph_in_state(graph_id, Some(initial_state))?;
-        self.debug_music_session("play_music_graph_in_state", session_id);
         self.sync_music_session_playback(session_id)?;
         Ok(session_id)
     }
@@ -408,12 +406,8 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
         target_state: MusicStateId,
     ) -> Result<(), FirewheelBackendError> {
-        eprintln!(
-            "[music-debug] request_music_state session={session_id:?} target_state={target_state:?}"
-        );
         self.save_music_session_resume_position(session_id)?;
         self.runtime.request_music_state(session_id, target_state)?;
-        self.debug_music_session("after_request_music_state", session_id);
         self.sync_music_session_playback(session_id)
     }
 
@@ -422,10 +416,8 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
-        eprintln!("[music-debug] complete_music_exit session={session_id:?}");
         self.save_music_session_resume_position(session_id)?;
         self.runtime.complete_music_exit(session_id)?;
-        self.debug_music_session("after_complete_music_exit", session_id);
         self.sync_music_session_playback(session_id)
     }
 
@@ -434,9 +426,7 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
-        eprintln!("[music-debug] complete_music_bridge session={session_id:?}");
         self.runtime.complete_music_bridge(session_id)?;
-        self.debug_music_session("after_complete_music_bridge", session_id);
         self.sync_music_session_playback(session_id)
     }
 
@@ -788,7 +778,6 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
-        self.debug_music_session("sync_music_session_playback:before", session_id);
         let status = self.runtime.music_status(session_id)?;
 
         match status.phase {
@@ -841,7 +830,6 @@ impl FirewheelBackend {
             }
         }
 
-        self.debug_music_session("sync_music_session_playback:after", session_id);
         Ok(())
     }
 
@@ -850,10 +838,6 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
         resolved_music: ResolvedMusicPlayback,
     ) -> Result<(), FirewheelBackendError> {
-        eprintln!(
-            "[music-debug] start_music_session_clip session={session_id:?} clip={:?} entry_offset={:.3}",
-            resolved_music.clip_id, resolved_music.entry_offset_seconds
-        );
         let clip_id = resolved_music.clip_id;
         let resolved = self.resolve_clip_playback(clip_id, resolved_music.entry_offset_seconds)?;
 
@@ -874,7 +858,6 @@ impl FirewheelBackend {
         self.play_music_clip_resolved(session_id, resolved, schedule_internal_stop)?;
         self.schedule_bridge_completion(session_id, resolved)?;
         self.active_music_clips.insert(session_id, clip_id);
-        self.debug_music_session("start_music_session_clip:started", session_id);
         self.update()?;
         Ok(())
     }
@@ -1207,7 +1190,6 @@ impl FirewheelBackend {
             self.schedule_bridge_completion(session_id, resolved)?;
             self.active_music_clips
                 .insert(session_id, resolved_music.clip_id);
-            self.debug_music_session("start_ready_pending_music_playbacks:started", session_id);
             started_any = true;
         }
 
@@ -1245,10 +1227,6 @@ impl FirewheelBackend {
                 waiting_for_wrap: next_cue.requires_wrap,
                 last_position_seconds: current_position_seconds,
             },
-        );
-        eprintln!(
-            "[music-debug] arm_exit_cue session={session_id:?} target_pos={:.3} wrap={}",
-            next_cue.cue_position_seconds, next_cue.requires_wrap
         );
         Ok(true)
     }
@@ -1339,10 +1317,6 @@ impl FirewheelBackend {
 
         for session_id in ready_sessions {
             self.pending_bridge_completions.remove(&session_id);
-            eprintln!(
-                "[music-debug] bridge_completion_ready session={session_id:?} now={:.3}",
-                now_seconds
-            );
             self.complete_music_bridge(session_id)?;
         }
 
@@ -1391,7 +1365,6 @@ impl FirewheelBackend {
 
         for session_id in ready_sessions {
             self.pending_exit_cues.remove(&session_id);
-            eprintln!("[music-debug] exit_cue_ready session={session_id:?}");
             self.complete_music_exit(session_id)?;
         }
 
@@ -1491,11 +1464,8 @@ impl FirewheelBackend {
             .first_node_state::<SamplerState, _>(worker_id, &self.context)
             .is_some()
         {
-            eprintln!("[music-debug] finish_worker_ignored_live worker={worker_id:?}");
             return;
         }
-
-        eprintln!("[music-debug] finish_worker worker={worker_id:?}");
 
         if let Some(instance_id) = self.worker_instances.remove(&worker_id) {
             if let Some(worker_ids) = self.instance_workers.get_mut(&instance_id) {
@@ -1513,8 +1483,6 @@ impl FirewheelBackend {
         let Some(session_id) = self.worker_music_sessions.remove(&worker_id) else {
             return;
         };
-
-        eprintln!("[music-debug] finish_music_worker worker={worker_id:?} session={session_id:?}");
 
         let mut bridge_finished = false;
 
@@ -1535,42 +1503,6 @@ impl FirewheelBackend {
             let _ = self.sync_music_session_playback(session_id);
         }
     }
-
-    fn debug_music_session(&self, label: &str, session_id: MusicSessionId) {
-        let status = self.runtime.music_status(session_id).ok();
-        let worker_ids = self
-            .music_session_workers
-            .get(&session_id)
-            .cloned()
-            .unwrap_or_default();
-        let live_workers = worker_ids
-            .iter()
-            .filter(|worker_id| {
-                self.sampler_pool
-                    .first_node_state::<SamplerState, _>(**worker_id, &self.context)
-                    .is_some()
-            })
-            .count();
-        let playhead = self
-            .music_session_playhead(session_id)
-            .map(|p| p.position_seconds);
-        let active_clip = self.active_music_clips.get(&session_id).copied();
-        let pending_clip = self.pending_music_playbacks.get(&session_id).copied();
-
-        eprintln!(
-            "[music-debug] {label} session={session_id:?} phase={:?} active_state={:?} desired_state={:?} active_clip={active_clip:?} pending_clip={pending_clip:?} pending_media={} workers={} live_workers={} playhead={}",
-            status.as_ref().map(|s| s.phase),
-            status.as_ref().map(|s| s.active_state),
-            status.as_ref().map(|s| s.desired_state),
-            self.pending_music_playbacks.contains_key(&session_id),
-            worker_ids.len(),
-            live_workers,
-            playhead
-                .map(|seconds| format!("{seconds:.3}"))
-                .unwrap_or_else(|| "n/a".into())
-        );
-    }
-
     fn event_instant_after_seconds(&self, delay_seconds: f64) -> EventInstant {
         EventInstant::Seconds(
             self.context.audio_clock_corrected().seconds + DurationSeconds(delay_seconds),
