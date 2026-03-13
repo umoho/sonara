@@ -1,0 +1,213 @@
+{
+  "bank": {
+    "id": "019ce700-0000-7000-8000-000000000001",
+    "name": "cue_trigger",
+    "objects": {
+      "events": [],
+      "buses": [],
+      "snapshots": [],
+      "clips": [
+        "019ce700-0000-7000-8000-000000000101",
+        "019ce700-0000-7000-8000-000000000102",
+        "019ce700-0000-7000-8000-000000000103"
+      ],
+      "resume_slots": [],
+      "sync_domains": [],
+      "music_graphs": [
+        "019ce700-0000-7000-8000-000000000201"
+      ]
+    },
+    "manifest": {
+      "assets": [
+        {
+          "id": "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
+          "name": "litesaturation-orchestra-fantasy-111168",
+          "source_path": "private_assets/litesaturation-orchestra-fantasy-111168.mp3",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019cdd00-60a5-7500-94be-6ee2074da8a6",
+          "name": "paulyudin-epic-battle-159260",
+          "source_path": "private_assets/paulyudin-epic-battle-159260.mp3",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000301",
+          "name": "rochick-boss-battle-279647",
+          "source_path": "private_assets/rochick-boss-battle-279647.mp3",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        }
+      ],
+      "resident_media": [],
+      "streaming_media": [
+        "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
+        "019cdd00-60a5-7500-94be-6ee2074da8a6",
+        "019ce700-0000-7000-8000-000000000301"
+      ]
+    }
+  },
+  "events": [],
+  "buses": [],
+  "snapshots": [],
+  "clips": [
+    {
+      "id": "019ce700-0000-7000-8000-000000000101",
+      "name": "preheat_loop",
+      "asset_id": "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
+      "source_range": null,
+      "loop_range": {
+        "start_seconds": 0.0,
+        "end_seconds": 1.0
+      },
+      "cues": [
+        {
+          "id": "019ce700-0000-7000-8000-000000000401",
+          "name": "battle_ready_0",
+          "position_seconds": 4.0,
+          "tags": [
+            "battle_ready"
+          ]
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000402",
+          "name": "battle_ready_1",
+          "position_seconds": 8.0,
+          "tags": [
+            "battle_ready"
+          ]
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000403",
+          "name": "battle_ready_2",
+          "position_seconds": 12.0,
+          "tags": [
+            "battle_ready"
+          ]
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000404",
+          "name": "battle_ready_3",
+          "position_seconds": 16.0,
+          "tags": [
+            "battle_ready"
+          ]
+        }
+      ],
+      "sync_domain": null
+    },
+    {
+      "id": "019ce700-0000-7000-8000-000000000102",
+      "name": "combat_bridge",
+      "asset_id": "019cdd00-60a5-7500-94be-6ee2074da8a6",
+      "source_range": {
+        "start_seconds": 0.0,
+        "end_seconds": 3.0
+      },
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019ce700-0000-7000-8000-000000000103",
+      "name": "combat_loop",
+      "asset_id": "019ce700-0000-7000-8000-000000000301",
+      "source_range": null,
+      "loop_range": {
+        "start_seconds": 0.0,
+        "end_seconds": 1.0
+      },
+      "cues": [
+        {
+          "id": "019ce700-0000-7000-8000-000000000405",
+          "name": "combat_in",
+          "position_seconds": 3.0,
+          "tags": [
+            "combat_in"
+          ]
+        }
+      ],
+      "sync_domain": null
+    }
+  ],
+  "resume_slots": [],
+  "sync_domains": [],
+  "music_graphs": [
+    {
+      "id": "019ce700-0000-7000-8000-000000000201",
+      "name": "cue_trigger",
+      "initial_state": "019ce700-0000-7000-8000-000000000501",
+      "states": [
+        {
+          "id": "019ce700-0000-7000-8000-000000000501",
+          "name": "preheat",
+          "target": {
+            "Clip": {
+              "clip_id": "019ce700-0000-7000-8000-000000000101"
+            }
+          },
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart"
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000502",
+          "name": "combat",
+          "target": {
+            "Clip": {
+              "clip_id": "019ce700-0000-7000-8000-000000000103"
+            }
+          },
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": {
+            "EntryCue": {
+              "tag": "combat_in"
+            }
+          }
+        }
+      ],
+      "transitions": [
+        {
+          "from": "019ce700-0000-7000-8000-000000000501",
+          "to": "019ce700-0000-7000-8000-000000000502",
+          "exit": {
+            "NextMatchingCue": {
+              "tag": "battle_ready"
+            }
+          },
+          "bridge_clip": "019ce700-0000-7000-8000-000000000102",
+          "destination": {
+            "EntryCue": {
+              "tag": "combat_in"
+            }
+          }
+        },
+        {
+          "from": "019ce700-0000-7000-8000-000000000502",
+          "to": "019ce700-0000-7000-8000-000000000501",
+          "exit": "Immediate",
+          "bridge_clip": null,
+          "destination": "ClipStart"
+        }
+      ]
+    }
+  ]
+}

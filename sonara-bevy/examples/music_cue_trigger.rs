@@ -2,15 +2,8 @@ use bevy::prelude::*;
 use sonara_bevy::MusicPhase;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
-use sonara_model::{
-    Bank, BankAsset, Clip, CuePoint, EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph,
-    MusicGraphId, MusicStateId, MusicStateNode, PlaybackTarget, StreamingMode, TimeRange,
-    TransitionRule,
-};
+use sonara_model::{MusicGraphId, MusicStateId};
 use sonara_runtime::{Fade, MusicSessionId};
-
-const COMBAT_ASSET_NAME: &str = "rochick-boss-battle-279647";
-const COMBAT_ASSET_PATH: &str = "private_assets/rochick-boss-battle-279647.mp3";
 
 fn main() {
     App::new()
@@ -65,113 +58,30 @@ fn setup_scene(
     mut state: ResMut<CueTriggerState>,
 ) {
     let package =
-        CompiledBankPackage::read_json_file("sonara-app/assets/music_demo/core.bank.json")
-            .expect("music demo compiled bank should load from JSON");
-    let mut manifest = package.bank.manifest.clone();
-    let preheat_asset = manifest
-        .assets
+        CompiledBankPackage::read_json_file("sonara-app/assets/music_demo/cue_trigger.bank.json")
+            .expect("cue trigger compiled bank should load from JSON");
+    let graph = package
+        .music_graphs
         .first()
         .cloned()
-        .expect("music demo should contain preheat asset");
-    let bridge_asset = manifest
-        .assets
-        .get(1)
-        .cloned()
-        .expect("music demo should contain bridge asset");
-    let combat_asset = BankAsset {
-        id: uuid::Uuid::now_v7(),
-        name: COMBAT_ASSET_NAME.into(),
-        source_path: COMBAT_ASSET_PATH.into(),
-        import_settings: bridge_asset.import_settings.clone(),
-        streaming: StreamingMode::Auto,
-    };
-    manifest.assets.push(combat_asset.clone());
-    manifest.streaming_media.push(combat_asset.id);
-
-    let mut preheat_clip = Clip::new("preheat_loop", preheat_asset.id);
-    preheat_clip.loop_range = Some(TimeRange::new(0.0, 1.0));
-    preheat_clip.cues = battle_ready_cues();
-
-    let bridge_clip = Clip {
-        id: sonara_model::ClipId::new(),
-        name: "combat_bridge".into(),
-        asset_id: bridge_asset.id,
-        source_range: Some(TimeRange::new(0.0, 3.0)),
-        loop_range: None,
-        cues: Vec::new(),
-        sync_domain: None,
-    };
-
-    let mut combat_clip = Clip::new("combat_loop", combat_asset.id);
-    combat_clip.loop_range = Some(TimeRange::new(0.0, 1.0));
-    let mut combat_entry = CuePoint::new("combat_in", 3.0);
-    combat_entry.tags.push("combat_in".into());
-    combat_clip.cues.push(combat_entry);
-
-    let mut graph = MusicGraph::new("cue_trigger");
-    graph.initial_state = Some(state.preheat_state);
-    graph.states.push(MusicStateNode {
-        id: state.preheat_state,
-        name: "preheat".into(),
-        target: PlaybackTarget::Clip {
-            clip_id: preheat_clip.id,
-        },
-        memory_slot: None,
-        memory_policy: MemoryPolicy::default(),
-        default_entry: EntryPolicy::ClipStart,
-    });
-    graph.states.push(MusicStateNode {
-        id: state.combat_state,
-        name: "combat".into(),
-        target: PlaybackTarget::Clip {
-            clip_id: combat_clip.id,
-        },
-        memory_slot: None,
-        memory_policy: MemoryPolicy::default(),
-        default_entry: EntryPolicy::EntryCue {
-            tag: "combat_in".into(),
-        },
-    });
-    graph.transitions.push(TransitionRule {
-        from: state.preheat_state,
-        to: state.combat_state,
-        exit: ExitPolicy::NextMatchingCue {
-            tag: "battle_ready".into(),
-        },
-        bridge_clip: Some(bridge_clip.id),
-        destination: EntryPolicy::EntryCue {
-            tag: "combat_in".into(),
-        },
-    });
-    graph.transitions.push(TransitionRule {
-        from: state.combat_state,
-        to: state.preheat_state,
-        exit: ExitPolicy::Immediate,
-        bridge_clip: None,
-        destination: EntryPolicy::ClipStart,
-    });
-
+        .expect("cue trigger bank should contain a music graph");
     state.graph_id = graph.id;
-
-    let mut bank = Bank::new("cue_trigger");
-    bank.manifest = manifest;
-    bank.objects
-        .clips
-        .extend([preheat_clip.id, bridge_clip.id, combat_clip.id]);
-    bank.objects.music_graphs.push(graph.id);
+    state.preheat_state = graph
+        .states
+        .iter()
+        .find(|music_state| music_state.name == "preheat")
+        .map(|music_state| music_state.id)
+        .expect("cue trigger graph should contain preheat state");
+    state.combat_state = graph
+        .states
+        .iter()
+        .find(|music_state| music_state.name == "combat")
+        .map(|music_state| music_state.id)
+        .expect("cue trigger graph should contain combat state");
 
     audio
-        .load_bank_with_definitions(
-            bank,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            vec![preheat_clip, bridge_clip, combat_clip],
-            Vec::new(),
-            Vec::new(),
-            vec![graph],
-        )
-        .expect("cue trigger definitions should load");
+        .load_compiled_bank(package)
+        .expect("cue trigger compiled bank should load");
 
     state.session_id = Some(
         audio
@@ -237,18 +147,6 @@ fn setup_scene(
                     ));
                 });
         });
-}
-
-fn battle_ready_cues() -> Vec<CuePoint> {
-    [4.0_f32, 8.0, 12.0, 16.0]
-        .into_iter()
-        .enumerate()
-        .map(|(index, seconds)| {
-            let mut cue = CuePoint::new(format!("battle_ready_{index}"), seconds);
-            cue.tags.push("battle_ready".into());
-            cue
-        })
-        .collect()
 }
 
 fn handle_demo_input(
