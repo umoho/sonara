@@ -74,6 +74,8 @@ pub type FirewheelRequestResult = RuntimeRequestResult;
 pub type FirewheelRequestOutcome =
     AudioCommandOutcome<FirewheelRequest, FirewheelRequestResult, FirewheelBackendError>;
 
+const MUSIC_SCHEDULE_EARLY_SECONDS: f64 = 0.020;
+
 /// 真实后端返回的一个实例播放头快照。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InstancePlayhead {
@@ -81,7 +83,7 @@ pub struct InstancePlayhead {
     pub worker_count: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct PendingMusicPlayback {
     clip_id: ClipId,
 }
@@ -89,6 +91,7 @@ struct PendingMusicPlayback {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PendingExitCue {
     target_position_seconds: f64,
+    target_audio_time_seconds: Option<f64>,
     waiting_for_wrap: bool,
     last_position_seconds: f64,
 }
@@ -850,7 +853,7 @@ impl FirewheelBackend {
             Ok(status) if status.phase == MusicPhase::PlayingBridge
         );
         self.play_music_clip_resolved(session_id, resolved, schedule_internal_stop)?;
-        self.schedule_bridge_completion(session_id, resolved)?;
+        self.schedule_bridge_completion(session_id, resolved, self.audio_clock_seconds())?;
         self.active_music_clips.insert(session_id, clip_id);
         self.update()?;
         Ok(())
@@ -1190,7 +1193,7 @@ impl FirewheelBackend {
                 Ok(status) if status.phase == MusicPhase::PlayingBridge
             );
             self.play_music_clip_resolved(session_id, resolved, schedule_internal_stop)?;
-            self.schedule_bridge_completion(session_id, resolved)?;
+            self.schedule_bridge_completion(session_id, resolved, self.audio_clock_seconds())?;
             self.active_music_clips
                 .insert(session_id, resolved_music.clip_id);
             started_any = true;
@@ -1222,11 +1225,18 @@ impl FirewheelBackend {
         else {
             return Ok(false);
         };
+        let target_audio_time_seconds = self.target_audio_time_for_music_cue(
+            session_id,
+            current_position_seconds,
+            next_cue.cue_position_seconds,
+            next_cue.requires_wrap,
+        )?;
 
         self.pending_exit_cues.insert(
             session_id,
             PendingExitCue {
                 target_position_seconds: next_cue.cue_position_seconds,
+                target_audio_time_seconds,
                 waiting_for_wrap: next_cue.requires_wrap,
                 last_position_seconds: current_position_seconds,
             },
@@ -1269,6 +1279,7 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
         resolved: ResolvedClipPlayback,
+        start_audio_time_seconds: f64,
     ) -> Result<(), FirewheelBackendError> {
         let playing_bridge = matches!(
             self.runtime.music_status(session_id),
@@ -1287,7 +1298,7 @@ impl FirewheelBackend {
         self.pending_bridge_completions.insert(
             session_id,
             PendingBridgeCompletion {
-                target_audio_time_seconds: self.audio_clock_seconds() + stop_after_seconds,
+                target_audio_time_seconds: start_audio_time_seconds + stop_after_seconds,
             },
         );
         Ok(())
@@ -1296,7 +1307,6 @@ impl FirewheelBackend {
     fn advance_pending_bridge_completions(&mut self) -> Result<(), FirewheelBackendError> {
         let session_ids: Vec<_> = self.pending_bridge_completions.keys().copied().collect();
         let mut ready_sessions = Vec::new();
-        let epsilon = 0.010;
         let now_seconds = self.audio_clock_seconds();
 
         for session_id in session_ids {
@@ -1313,7 +1323,7 @@ impl FirewheelBackend {
                 continue;
             }
 
-            if now_seconds + epsilon >= pending.target_audio_time_seconds {
+            if now_seconds + MUSIC_SCHEDULE_EARLY_SECONDS >= pending.target_audio_time_seconds {
                 ready_sessions.push(session_id);
             }
         }
@@ -1330,6 +1340,7 @@ impl FirewheelBackend {
         let session_ids: Vec<_> = self.pending_exit_cues.keys().copied().collect();
         let mut ready_sessions = Vec::new();
         let epsilon = 0.010;
+        let now_seconds = self.audio_clock_seconds();
 
         for session_id in session_ids {
             let Some(mut pending) = self.pending_exit_cues.get(&session_id).copied() else {
@@ -1343,6 +1354,13 @@ impl FirewheelBackend {
             if !waiting {
                 self.pending_exit_cues.remove(&session_id);
                 continue;
+            }
+
+            if let Some(target_audio_time_seconds) = pending.target_audio_time_seconds {
+                if now_seconds + MUSIC_SCHEDULE_EARLY_SECONDS >= target_audio_time_seconds {
+                    ready_sessions.push(session_id);
+                    continue;
+                }
             }
 
             let Some(current_position_seconds) = self.music_session_local_playhead(session_id)?
@@ -1426,6 +1444,60 @@ impl FirewheelBackend {
         let asset_position_seconds = validate_playback_position_seconds(asset_position_seconds)?;
 
         Ok((asset_position_seconds - clip_base_seconds).max(0.0))
+    }
+
+    fn clip_duration_seconds(&self, clip_id: ClipId) -> Result<Option<f64>, FirewheelBackendError> {
+        let clip = self
+            .runtime
+            .clip(clip_id)
+            .ok_or(FirewheelBackendError::ClipNotLoaded(clip_id))?;
+        let clip_base_seconds = clip
+            .source_range
+            .map(|range| range.start_seconds as f64)
+            .unwrap_or(0.0);
+        let clip_base_seconds = validate_playback_position_seconds(clip_base_seconds)?;
+
+        if let Some(range) = clip.source_range {
+            let end_seconds = validate_playback_position_seconds(range.end_seconds as f64)?;
+            return Ok(Some((end_seconds - clip_base_seconds).max(0.0)));
+        }
+
+        let Some(resource) = self.sample_resources.get(&clip.asset_id) else {
+            return Ok(None);
+        };
+        let Some(sample_rate) = resource.sample_rate() else {
+            return Ok(None);
+        };
+        let sample_rate = f64::from(sample_rate.get());
+        if sample_rate <= 0.0 {
+            return Ok(None);
+        }
+
+        Ok(Some(
+            resource.len_frames() as f64 / sample_rate - clip_base_seconds,
+        ))
+    }
+
+    fn target_audio_time_for_music_cue(
+        &self,
+        session_id: MusicSessionId,
+        current_position_seconds: f64,
+        cue_position_seconds: f64,
+        requires_wrap: bool,
+    ) -> Result<Option<f64>, FirewheelBackendError> {
+        let Some(clip_id) = self.active_music_clips.get(&session_id).copied() else {
+            return Ok(None);
+        };
+        let delta_seconds = if requires_wrap {
+            let Some(clip_duration_seconds) = self.clip_duration_seconds(clip_id)? else {
+                return Ok(None);
+            };
+            (clip_duration_seconds - current_position_seconds).max(0.0) + cue_position_seconds
+        } else {
+            (cue_position_seconds - current_position_seconds).max(0.0)
+        };
+
+        Ok(Some(self.audio_clock_seconds() + delta_seconds))
     }
 
     fn stop_event_instance_workers(&mut self, instance_id: EventInstanceId, fade_seconds: f64) {

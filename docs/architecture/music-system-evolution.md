@@ -459,6 +459,48 @@ play(new_event)
 - 基于参数自动化重新设计 transition fade
 - 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
 
+更精确的 `[2]` cue handoff 建议按以下顺序推进：
+
+1. arm cue 时就计算绝对音频时刻
+   - 不再只记录 `target_position_seconds`
+   - 同时记录：
+     - `target_audio_time_seconds`
+     - `target_event_instant`
+   - 这样 backend 后续不必完全依赖每帧 `playhead >= cue` 判断
+
+2. 源段退出改成预定停止
+   - 当前 source clip 的 stop 不再是“update 发现到了 cue 再 stop”
+   - 而是在 cue arm 时就 schedule 到对应 `EventInstant`
+   - 这也是未来 transition fade 的挂点
+
+3. `preheat -> bridge` 改成预定启动
+   - bridge 不再等 update 某一帧才启动
+   - 而是在已知的 cue handoff 时刻直接 `start_time=Some(target_event_instant)`
+   - 若资源尚未 ready，则保留当前 fallback 路径
+
+4. `bridge -> combat` 改成预定启动
+   - bridge 启动时即可算出它的结束时刻
+   - 目标 state 的 clip 也应尽量在那个时刻预定启动
+   - 不再主要依赖 `advance_pending_bridge_completions()` 的后验轮询
+
+5. runtime 状态推进与真实音频执行解耦
+   - runtime 继续维护：
+     - `WaitingExitCue`
+     - `PlayingBridge`
+     - `Stable`
+   - backend 新增更明确的 pending action / scheduled handoff bookkeeping
+   - 音频动作先排好，runtime 只在时刻到达后推进 bookkeeping
+
+6. 旧的 epsilon 轮询逻辑逐步降级为 fallback
+   - `advance_waiting_exit_cues()`
+   - `advance_pending_bridge_completions()`
+   - 先保留容错，再逐步缩小职责
+
+7. transition fade 最后再接回
+   - 不和 cue handoff 精度这一轮一起做
+   - 等 source stop / bridge start / combat start 三个时刻都稳定后
+   - 再以参数自动化方式重新接回 fade/crossfade
+
 ### 阶段 0：能力验证 Spike（已完成）
 
 目标：
