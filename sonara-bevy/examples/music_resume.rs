@@ -3,7 +3,7 @@ use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
 use sonara_model::{
     Bank, Clip, EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode,
-    PlaybackTarget, ResumeSlot, TransitionRule,
+    PlaybackTarget, ResumeSlot, Track, TrackBinding, TrackRole, TransitionRule,
 };
 use sonara_runtime::MusicSessionId;
 
@@ -88,15 +88,22 @@ fn setup_scene(
     let combat_clip = Clip::new("combat_main", combat_asset.id);
     let explore_slot = ResumeSlot::new("explore_memory");
     let combat_slot = ResumeSlot::new("combat_memory");
+    let main_track = Track::new("music_main", TrackRole::Main);
     let mut graph = MusicGraph::new("resume_demo");
     graph.initial_state = Some(state.explore_state);
+    graph.tracks.push(main_track.clone());
     graph.states.push(MusicStateNode {
         id: state.explore_state,
         name: "explore".into(),
         target: PlaybackTarget::Clip {
             clip_id: explore_clip.id,
         },
-        bindings: Vec::new(),
+        bindings: vec![TrackBinding {
+            track_id: main_track.id,
+            target: PlaybackTarget::Clip {
+                clip_id: explore_clip.id,
+            },
+        }],
         memory_slot: Some(explore_slot.id),
         memory_policy: MemoryPolicy {
             ttl_seconds: Some(RESUME_TTL_SECONDS),
@@ -110,7 +117,12 @@ fn setup_scene(
         target: PlaybackTarget::Clip {
             clip_id: combat_clip.id,
         },
-        bindings: Vec::new(),
+        bindings: vec![TrackBinding {
+            track_id: main_track.id,
+            target: PlaybackTarget::Clip {
+                clip_id: combat_clip.id,
+            },
+        }],
         memory_slot: Some(combat_slot.id),
         memory_policy: MemoryPolicy {
             ttl_seconds: Some(RESUME_TTL_SECONDS),
@@ -123,6 +135,7 @@ fn setup_scene(
         to: state.combat_state,
         exit: ExitPolicy::Immediate,
         bridge_clip: None,
+        stinger_clip: None,
         destination: EntryPolicy::Resume,
     });
     graph.transitions.push(TransitionRule {
@@ -130,6 +143,7 @@ fn setup_scene(
         to: state.explore_state,
         exit: ExitPolicy::Immediate,
         bridge_clip: None,
+        stinger_clip: None,
         destination: EntryPolicy::Resume,
     });
 

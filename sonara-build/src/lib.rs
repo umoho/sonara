@@ -720,6 +720,20 @@ fn validate_music_graph(
                 push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
             }
         }
+
+        if let Some(stinger_clip) = transition.stinger_clip {
+            let clip = clip_by_id
+                .get(&stinger_clip)
+                .ok_or(BuildError::MissingClipDefinition)?;
+            push_unique(&mut dependencies.clip_ids, stinger_clip);
+
+            if let Some(sync_domain_id) = clip.sync_domain {
+                if !sync_domain_by_id.contains_key(&sync_domain_id) {
+                    return Err(BuildError::MissingSyncDomainDefinition);
+                }
+                push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+            }
+        }
     }
 
     Ok(dependencies)
@@ -1257,6 +1271,7 @@ mod tests {
                 tag: "loop_out".into(),
             },
             bridge_clip: Some(clip.id),
+            stinger_clip: None,
             destination: EntryPolicy::SameSyncPosition,
         });
 

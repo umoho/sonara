@@ -148,6 +148,18 @@
       "id": "019ce700-0000-7000-8000-000000000201",
       "name": "cue_trigger",
       "initial_state": "019ce700-0000-7000-8000-000000000501",
+      "tracks": [
+        {
+          "id": "019ce700-0000-7000-8000-000000000601",
+          "name": "music_main",
+          "role": "Main"
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000602",
+          "name": "music_bridge",
+          "role": "Bridge"
+        }
+      ],
       "states": [
         {
           "id": "019ce700-0000-7000-8000-000000000501",
@@ -157,6 +169,16 @@
               "clip_id": "019ce700-0000-7000-8000-000000000101"
             }
           },
+          "bindings": [
+            {
+              "track_id": "019ce700-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019ce700-0000-7000-8000-000000000101"
+                }
+              }
+            }
+          ],
           "memory_slot": null,
           "memory_policy": {
             "ttl_seconds": null,
@@ -172,6 +194,16 @@
               "clip_id": "019ce700-0000-7000-8000-000000000103"
             }
           },
+          "bindings": [
+            {
+              "track_id": "019ce700-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019ce700-0000-7000-8000-000000000103"
+                }
+              }
+            }
+          ],
           "memory_slot": null,
           "memory_policy": {
             "ttl_seconds": null,
@@ -194,6 +226,7 @@
             }
           },
           "bridge_clip": "019ce700-0000-7000-8000-000000000102",
+          "stinger_clip": null,
           "destination": {
             "EntryCue": {
               "tag": "combat_in"
@@ -205,6 +238,7 @@
           "to": "019ce700-0000-7000-8000-000000000501",
           "exit": "Immediate",
           "bridge_clip": null,
+          "stinger_clip": null,
           "destination": "ClipStart"
         }
       ]

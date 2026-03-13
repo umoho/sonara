@@ -747,6 +747,7 @@ mod tests {
                 tag: "battle_ready".into(),
             },
             bridge_clip: Some(bridge_clip.id),
+            stinger_clip: None,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),
             },

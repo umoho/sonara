@@ -396,6 +396,8 @@ play(new_event)
     - `ResumeSlot`
     - `SyncDomain`
     - `MusicGraph`
+    - `Track`
+    - `TrackBinding`
 - `阶段 2` 进行中
   - 已完成：
     - 打开 Firewheel 的 `scheduled_events` / `musical_transport`
@@ -438,6 +440,17 @@ play(new_event)
       - 用户触发后等待下一个合法 cue
       - 然后进入 `bridge -> combat`
     - `music_cue_trigger` 已迁到独立 compiled bank JSON
+    - 示例已开始显式使用 `tracks + bindings`
+      - `music_resume` 显式声明 `main` track
+      - `cue_trigger.bank.json` 显式声明 `main / bridge` tracks
+    - runtime/backend 已开始消费 `Track`
+      - `ResolvedMusicPlayback` 会带上当前 `track_id`
+      - `PlayingBridge` 阶段会解析到 `Bridge` track
+      - Firewheel backend 已按 `session + track` 记住当前激活的音乐内容
+    - `TransitionRule.stinger_clip` 已接入第一版执行链
+      - build 会校验 stinger clip 依赖
+      - runtime 会为 transition 解析 `stinger_track_id`
+      - backend 会在目标状态接管时触发 stinger
     - `pending media` 延后启动路径已稳定
   - 仍未完成：
     - 基于 cue 的更精确定时切换

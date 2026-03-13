@@ -41,6 +41,11 @@ impl MusicGraph {
             .iter()
             .find(|track| matches!(track.role, TrackRole::Main))
     }
+
+    /// 按角色读取图中声明的 track。
+    pub fn track_by_role(&self, role: TrackRole) -> Option<&Track> {
+        self.tracks.iter().find(|track| track.role == role)
+    }
 }
 
 /// 音乐图中的一个状态节点。
@@ -59,6 +64,13 @@ pub struct MusicStateNode {
 }
 
 impl MusicStateNode {
+    /// 读取当前状态绑定到指定 track 的目标。
+    pub fn binding_for_track(&self, track_id: TrackId) -> Option<&TrackBinding> {
+        self.bindings
+            .iter()
+            .find(|binding| binding.track_id == track_id)
+    }
+
     /// 读取当前状态在兼容模式下的主目标。
     ///
     /// 如果图中声明了主 track，且当前状态也为它绑定了内容，则优先返回该绑定；
@@ -67,9 +79,7 @@ impl MusicStateNode {
         graph
             .main_track()
             .and_then(|track| {
-                self.bindings
-                    .iter()
-                    .find(|binding| binding.track_id == track.id)
+                self.binding_for_track(track.id)
                     .map(|binding| &binding.target)
             })
             .unwrap_or(&self.target)
@@ -177,6 +187,8 @@ pub struct TransitionRule {
     #[serde(default)]
     pub exit: ExitPolicy,
     pub bridge_clip: Option<ClipId>,
+    #[serde(default)]
+    pub stinger_clip: Option<ClipId>,
     #[serde(default)]
     pub destination: EntryPolicy,
 }

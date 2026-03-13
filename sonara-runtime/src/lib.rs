@@ -6,7 +6,7 @@ use sonara_model::{
     Bank, BankId, BankObjects, BusId, Clip, ClipId, EntryPolicy, Event, EventContentNode, EventId,
     ExitPolicy, MusicGraph, MusicGraphId, MusicStateId, MusicStateNode, NodeId, NodeRef,
     ParameterId, ParameterValue, PlaybackTarget, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId,
-    SyncDomain, SyncDomainId, TransitionRule,
+    SyncDomain, SyncDomainId, TrackId, TrackRole, TransitionRule,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -98,6 +98,9 @@ pub struct PendingMusicTransition {
     pub from_state: MusicStateId,
     pub to_state: MusicStateId,
     pub bridge_clip: Option<ClipId>,
+    pub bridge_track_id: Option<TrackId>,
+    pub stinger_clip: Option<ClipId>,
+    pub stinger_track_id: Option<TrackId>,
     pub exit: ExitPolicy,
     pub destination: EntryPolicy,
 }
@@ -122,6 +125,7 @@ pub struct MusicStatus {
     pub desired_state: MusicStateId,
     pub active_state: MusicStateId,
     pub phase: MusicPhase,
+    pub current_track_id: Option<TrackId>,
     pub current_target: PlaybackTarget,
     pub pending_transition: Option<PendingMusicTransition>,
 }
@@ -137,6 +141,7 @@ pub struct ResumeMemoryEntry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedMusicPlayback {
     pub clip_id: ClipId,
+    pub track_id: Option<TrackId>,
     pub entry_offset_seconds: f64,
 }
 
@@ -872,6 +877,8 @@ impl SonaraRuntime {
         }
 
         let transition = lookup_transition_rule(graph, active_state, target_state)?.clone();
+        let pending_transition =
+            self.build_pending_transition(graph, active_state, target_state, &transition);
         let session = self
             .music_sessions
             .get_mut(&session_id)
@@ -887,13 +894,7 @@ impl SonaraRuntime {
         }
 
         let starts_with_bridge = matches!(transition.exit, ExitPolicy::Immediate);
-        session.pending_transition = Some(PendingMusicTransition {
-            from_state: active_state,
-            to_state: target_state,
-            bridge_clip: transition.bridge_clip,
-            exit: transition.exit,
-            destination: transition.destination,
-        });
+        session.pending_transition = Some(pending_transition);
         session.phase = if starts_with_bridge {
             MusicPhase::PlayingBridge
         } else {
@@ -901,6 +902,71 @@ impl SonaraRuntime {
         };
 
         Ok(())
+    }
+
+    /// 预览一次音乐状态切换将使用的最小 transition 语义。
+    pub fn preview_music_transition(
+        &self,
+        session_id: MusicSessionId,
+        target_state: MusicStateId,
+    ) -> Result<Option<PendingMusicTransition>, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        if session.phase == MusicPhase::Stopped {
+            return Err(RuntimeError::MusicSessionPhaseMismatch {
+                session_id,
+                expected: MusicPhase::Stable,
+                actual: session.phase,
+            });
+        }
+
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        lookup_music_state(graph, target_state)?;
+
+        if session.active_state == target_state {
+            return Ok(None);
+        }
+
+        let transition = lookup_transition_rule(graph, session.active_state, target_state)?;
+        Ok(Some(self.build_pending_transition(
+            graph,
+            session.active_state,
+            target_state,
+            transition,
+        )))
+    }
+
+    fn build_pending_transition(
+        &self,
+        graph: &MusicGraph,
+        from_state: MusicStateId,
+        to_state: MusicStateId,
+        transition: &TransitionRule,
+    ) -> PendingMusicTransition {
+        let bridge_track_id = transition
+            .bridge_clip
+            .and(graph.track_by_role(TrackRole::Bridge).map(|track| track.id));
+        let stinger_track_id = transition.stinger_clip.and(
+            graph
+                .track_by_role(TrackRole::Stinger)
+                .map(|track| track.id),
+        );
+
+        PendingMusicTransition {
+            from_state,
+            to_state,
+            bridge_clip: transition.bridge_clip,
+            bridge_track_id,
+            stinger_clip: transition.stinger_clip,
+            stinger_track_id,
+            exit: transition.exit.clone(),
+            destination: transition.destination.clone(),
+        }
     }
 
     /// 通知运行时：当前会话已到达允许退出的切点。
@@ -992,6 +1058,14 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_state(graph, session.active_state)?;
+        let current_track_id = if session.phase == MusicPhase::PlayingBridge {
+            session
+                .pending_transition
+                .as_ref()
+                .and_then(|transition| transition.bridge_track_id)
+        } else {
+            graph.main_track().map(|track| track.id)
+        };
 
         Ok(MusicStatus {
             session_id,
@@ -999,6 +1073,7 @@ impl SonaraRuntime {
             desired_state: session.desired_state,
             active_state: session.active_state,
             phase: session.phase,
+            current_track_id,
             current_target: state.primary_target(graph).clone(),
             pending_transition: session.pending_transition.clone(),
         })
@@ -1075,6 +1150,10 @@ impl SonaraRuntime {
                 .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
             return Ok(ResolvedMusicPlayback {
                 clip_id,
+                track_id: session
+                    .pending_transition
+                    .as_ref()
+                    .and_then(|transition| transition.bridge_track_id),
                 entry_offset_seconds: 0.0,
             });
         }
@@ -1088,6 +1167,7 @@ impl SonaraRuntime {
 
         Ok(ResolvedMusicPlayback {
             clip_id: *clip_id,
+            track_id: graph.main_track().map(|track| track.id),
             entry_offset_seconds,
         })
     }
@@ -2112,13 +2192,20 @@ mod tests {
         let bridge_clip = Clip::new("transition", Uuid::now_v7());
         let preheat_state = MusicStateId::new();
         let boss_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let bridge_track = Track::new("music_bridge", TrackRole::Bridge);
         let mut graph = MusicGraph::new("boss_music");
         graph.initial_state = Some(preheat_state);
+        graph.tracks.push(main_track.clone());
+        graph.tracks.push(bridge_track.clone());
         graph.states.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2127,7 +2214,10 @@ mod tests {
             id: boss_state,
             name: "boss".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2139,6 +2229,7 @@ mod tests {
                 tag: "battle_ready".into(),
             },
             bridge_clip: Some(bridge_clip.id),
+            stinger_clip: None,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),
             },
@@ -2176,6 +2267,7 @@ mod tests {
         assert_eq!(waiting_status.active_state, preheat_state);
         assert_eq!(waiting_status.desired_state, boss_state);
         assert_eq!(waiting_status.phase, MusicPhase::WaitingExitCue);
+        assert_eq!(waiting_status.current_track_id, Some(main_track.id));
 
         runtime
             .complete_music_exit(session_id)
@@ -2184,6 +2276,13 @@ mod tests {
             .music_status(session_id)
             .expect("music status should resolve");
         assert_eq!(bridge_status.phase, MusicPhase::PlayingBridge);
+        assert_eq!(bridge_status.current_track_id, Some(bridge_track.id));
+
+        let bridge_playback = runtime
+            .resolve_music_playback(session_id, 0.0)
+            .expect("bridge playback should resolve");
+        assert_eq!(bridge_playback.clip_id, bridge_clip.id);
+        assert_eq!(bridge_playback.track_id, Some(bridge_track.id));
 
         runtime
             .complete_music_bridge(session_id)
@@ -2352,6 +2451,7 @@ mod tests {
             to: combat_state,
             exit: ExitPolicy::Immediate,
             bridge_clip: None,
+            stinger_clip: None,
             destination: EntryPolicy::Resume,
         });
 
@@ -2514,6 +2614,94 @@ mod tests {
     }
 
     #[test]
+    fn preview_music_transition_resolves_stinger_track() {
+        let preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
+        let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
+        let stinger_clip = Clip::new("boss_hit", Uuid::now_v7());
+        let preheat_state = MusicStateId::new();
+        let boss_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let stinger_track = Track::new("music_stinger", TrackRole::Stinger);
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_state = Some(preheat_state);
+        graph.tracks.push(main_track.clone());
+        graph.tracks.push(stinger_track.clone());
+        graph.states.push(MusicStateNode {
+            id: preheat_state,
+            name: "preheat".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: preheat_clip.id,
+            },
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: preheat_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.states.push(MusicStateNode {
+            id: boss_state,
+            name: "boss".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: boss_clip.id,
+            },
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: boss_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+        });
+        graph.transitions.push(TransitionRule {
+            from: preheat_state,
+            to: boss_state,
+            exit: ExitPolicy::NextMatchingCue {
+                tag: "battle_ready".into(),
+            },
+            bridge_clip: None,
+            stinger_clip: Some(stinger_clip.id),
+            destination: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects
+            .clips
+            .extend([preheat_clip.id, boss_clip.id, stinger_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, boss_clip, stinger_clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with stinger track");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let preview = runtime
+            .preview_music_transition(session_id, boss_state)
+            .expect("transition preview should resolve")
+            .expect("transition preview should exist");
+
+        assert_eq!(preview.stinger_clip, Some(stinger_clip.id));
+        assert_eq!(preview.stinger_track_id, Some(stinger_track.id));
+    }
+
+    #[test]
     fn find_next_music_exit_cue_prefers_current_cycle_then_wraps_looping_clip() {
         let mut preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
         preheat_clip.loop_range = Some(TimeRange::new(0.0, 12.0));
@@ -2557,6 +2745,7 @@ mod tests {
                 tag: "battle_ready".into(),
             },
             bridge_clip: None,
+            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
 
