@@ -1170,6 +1170,7 @@ impl FirewheelBackend {
 
     fn start_ready_pending_music_playbacks(&mut self) -> Result<(), FirewheelBackendError> {
         let pending_sessions: Vec<_> = self.pending_music_playbacks.keys().copied().collect();
+        let mut started_any = false;
 
         for session_id in pending_sessions {
             let Some(pending) = self.pending_music_playbacks.get(&session_id).copied() else {
@@ -1207,6 +1208,13 @@ impl FirewheelBackend {
             self.active_music_clips
                 .insert(session_id, resolved_music.clip_id);
             self.debug_music_session("start_ready_pending_music_playbacks:started", session_id);
+            started_any = true;
+        }
+
+        if started_any {
+            self.context
+                .update()
+                .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
         }
 
         Ok(())
