@@ -598,6 +598,72 @@ play(new_event)
 - 已完成 `sonara-runtime` / `sonara-firewheel` / `sonara-bevy` 的装载链贯通
 - 当前仍保持现有 `Event` 路径兼容，未替换 `SamplerNode`
 
+### 1.1 Track 抽象的长期方向
+
+引入 `MusicGraph / TransitionRule / SyncDomain` 之后，Sonara 后续大概率还需要一层明确的 `Track` 抽象。
+
+这里的 `Track` 不应简单理解为 DAW 编辑器里“时间轴上的一条轨道”，而更应理解为：
+
+- 一条可独立调度的播放层
+- 一条可独立混音与自动化的控制层
+- 一条可承载不同音乐职责的运行时槽位
+
+建议与 `Bus` 明确区分：
+
+- `Track` 负责：
+  - 内容怎么播
+  - 谁能与谁并存
+  - 谁会替换谁
+  - 哪些内容适合独立自动化
+- `Bus` 负责：
+  - 声音最终流向哪
+  - 整体混音、snapshot、send、效果链
+
+这层抽象的价值主要来自三个方向：
+
+- `[2]` 中的 `bridge -> combat` 可在未来更自然地接入 `stinger`
+- `[3]` 中的同步变体 / stem 切换，更适合表达为“不同 track 上的内容切换或开关”
+- 参数自动化落地后，`track gain` 会比“直接操纵当前所有 worker”更稳定
+
+最小建议不是立刻做完整 timeline system，而是先为以下角色预留：
+
+- `music_main`
+- `music_bridge`
+- `music_stinger`
+- 未来可扩展到：
+  - `music_layer/*`
+  - `ui`
+  - `sfx`
+
+后续若引入 `TrackBinding`，更理想的高层表达会变成：
+
+- `MusicStateNode` 不只绑定单一 `Clip`
+- 而是绑定一个或多个 `TrackBinding`
+- `TransitionRule` 也可以显式引用：
+  - `bridge`
+  - `stinger`
+  - `stinger_timing`
+  - `track_policy`
+
+可借鉴的外部模型：
+
+- Wwise：`Music Segment` 下显式拥有 `Music Track`，并由 `Transition Matrix` 与 `Stinger` 驱动过渡
+- CRIWARE / ADX2：`Sequence` 下显式拥有多个 `Track`，并支持 `Track transition by selector` 与 `Block playback`
+- FMOD：虽有 `logic tracks / transition timeline`，但更偏“单 event 单时间线”的 cursor 跳转，不宜作为 Sonara 的长期上层模型
+
+对 Sonara 的直接启发：
+
+- 不要把未来的音乐系统锁死在“单条时间线 + cursor 跳转”上
+- 更适合走：
+  - `MusicGraph`
+  - `Track`
+  - `TransitionRule`
+  - `Automation`
+  这套相对解耦的结构
+- 其中 `Track` 更像播放控制层，`Bus` 更像混音路由层
+
+这一方向目前仍停留在设计层，不建议在 `[1][2]` MVP 尚未完全收口前立即实现。
+
 ### 阶段 2：Runtime / Backend Transport 基础（进行中）
 
 目标：
