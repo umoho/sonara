@@ -174,6 +174,57 @@ AudioAsset
 - 短时间脱战再入战斗，沿用旧进度
 - 过了较久，再次进入则重新开始
 
+### 4.4 Fade 与参数自动化
+
+`fade` 不建议长期作为一个只服务音乐切换的临时补丁能力。
+
+更合适的定位是：
+
+- 在用户语义层，`fade` 是播放控制语义
+  - `stop fade`
+  - `music transition fade`
+  - `bridge -> target` 的淡入淡出
+  - `snapshot` / `bus` 的音量渐变
+- 在 backend 执行层，`fade` 是参数自动化的一种特例
+  - 本质上是“某个参数在一段时间内按某条曲线变化”
+
+因此长期建议补的不是“更多 fade 特判”，而是一套更通用的参数自动化基础：
+
+- `AutomationTarget`
+  - 目标是谁
+  - 例如 `InstanceGain`、`MusicSessionGain`、`BusVolume`、`NodeParam(...)`
+- `AutomationCurve`
+  - 变化曲线
+  - 第一阶段建议只支持少量固定曲线：
+    - `Step`
+    - `Linear`
+    - `EqualPower`
+    - `EaseInOut`
+- `AutomationSegment`
+  - 从何时开始，到何时结束，起点值和终点值是什么
+
+这样后续这些能力都可以共用同一底层：
+
+- `stop(instance, fade)`
+- `stop_music_session(..., fade)`
+- `music transition fade`
+- `bus volume ramp`
+- `snapshot fade`
+- effect 参数渐变
+
+建议的长期边界是：
+
+- runtime
+  - 负责把高层语义翻译成 automation plan
+- backend
+  - 负责按音频时钟真正执行参数自动化
+
+当前阶段的取舍：
+
+- 先允许 `fade` 作为最小能力独立落地
+- 但文档和后续实现都应把它视为“参数自动化系统的第一个用例”
+- 不建议把用户 API 长期设计成“先手工加 gain effect，再自己拉参数”
+
 ## 5. 推荐 API 方向
 
 ### 5.1 保留现有通用 API
@@ -355,9 +406,11 @@ play(new_event)
     - `Clip` 直连 Firewheel sampler 播放
     - `source_range.start` 起播和 `source_range.end` 提前停播
     - `MusicGraph -> MusicSession -> Clip` 的真实后端接线
+    - 最小非即时 fade
+      - `stop(instance, Fade::seconds(...))`
+      - `stop_music_session(..., Fade::seconds(...))`
   - 未完成：
     - `loop_range` 子区间循环
-    - 非立即 fade / crossfade
     - `schedule_handoff(...)`
 - `阶段 3` 已提前完成一部分逻辑骨架
   - runtime / facade 已有：
@@ -384,6 +437,8 @@ play(new_event)
       - 先播 `preheat`
       - 用户触发后等待下一个合法 cue
       - 然后进入 `bridge -> combat`
+    - `music_cue_trigger` 已迁到独立 compiled bank JSON
+    - `pending media` 延后启动路径已稳定
   - 仍未完成：
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`
@@ -399,8 +454,9 @@ play(new_event)
 
 当前最接近的下一步：
 
-- 在 backend 执行层补最小淡变
-- 再继续推进更精确的 cue 对拍与 handoff
+- 继续推进更精确的 cue 对拍与 handoff
+- 收口 `loop_range` 子区间循环
+- 基于参数自动化重新设计 transition fade
 - 最后再进入功能 `[3]`：`SyncDomain` 驱动的同步变体 / stem 切换
 
 ### 阶段 0：能力验证 Spike（已完成）
@@ -546,12 +602,13 @@ backend 侧新增：
     - `seek_instance()`
     - `seek_instance_after()`
     - `audio_clock_seconds()`
+    - 非立即 `stop(..., Fade::seconds(...))`
+    - 非立即 `stop_music_session(..., Fade::seconds(...))`
   - `sonara-bevy` 已支持：
     - `instance_playhead_seconds()`
 - 未完成：
   - `start_clip(asset_id, offset, loop_range)` 这一层明确 API
   - `Clip.source_range / loop_range` 真正下沉到 backend
-  - 非即时 fade / crossfade
   - `schedule_handoff(...)`
   - runtime 里的 `ClipCursor / TransportStatus` 明确对象化
 
@@ -610,6 +667,15 @@ Stopped
   - `MusicSession` 接到真实 backend
   - 功能 `[1]` 能真实恢复进度
   - 功能 `[2]` 能真实等待切点并完成 bridge handoff
+
+补充：
+
+- 上述 3 条 MVP 主线现已具备，并已有可试听 example：
+  - `[1]`：`music_resume`
+  - `[2]`：`music_cue_trigger`
+- 本阶段剩余工作更偏执行质量：
+  - 更精确的 cue handoff
+  - 以参数自动化为基础重新落 transition fade/crossfade
 
 ### 阶段 4：实现功能 `[3]`
 

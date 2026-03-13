@@ -52,8 +52,6 @@ pub enum FirewheelBackendError {
     Update(String),
     #[error("Firewheel worker 创建失败: {0}")]
     NewWorker(#[from] NewWorkerError),
-    #[error("Firewheel backend 暂不支持非立即 stop, fade={0} 秒")]
-    UnsupportedFade(f32),
     #[error("播放位置 `{0}` 必须是非负有限秒数")]
     InvalidPlaybackPosition(f64),
     #[error("调度延迟 `{0}` 必须是非负有限秒数")]
@@ -436,16 +434,10 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
         fade: Fade,
     ) -> Result<(), FirewheelBackendError> {
-        if fade.duration_seconds != 0.0 {
-            return Err(FirewheelBackendError::UnsupportedFade(
-                fade.duration_seconds,
-            ));
-        }
-
         self.save_music_session_resume_position(session_id)?;
         self.runtime.stop_music_session(session_id, fade)?;
         self.pending_music_playbacks.remove(&session_id);
-        self.stop_music_session_workers(session_id);
+        self.stop_music_session_workers(session_id, normalize_fade_duration_seconds(fade));
         self.active_music_clips.remove(&session_id);
         self.update()?;
         Ok(())
@@ -565,15 +557,9 @@ impl FirewheelBackend {
         instance_id: EventInstanceId,
         fade: Fade,
     ) -> Result<(), FirewheelBackendError> {
-        if fade.duration_seconds != 0.0 {
-            return Err(FirewheelBackendError::UnsupportedFade(
-                fade.duration_seconds,
-            ));
-        }
-
         self.runtime.stop(instance_id, fade)?;
         self.pending_playbacks.remove(&instance_id);
-        self.stop_event_instance_workers(instance_id);
+        self.stop_event_instance_workers(instance_id, normalize_fade_duration_seconds(fade));
         self.update()?;
         Ok(())
     }
@@ -785,7 +771,7 @@ impl FirewheelBackend {
                 self.pending_music_playbacks.remove(&session_id);
                 self.pending_exit_cues.remove(&session_id);
                 self.pending_bridge_completions.remove(&session_id);
-                self.stop_music_session_workers(session_id);
+                self.stop_music_session_workers(session_id, 0.0);
                 self.active_music_clips.remove(&session_id);
                 self.update()?;
             }
@@ -849,8 +835,16 @@ impl FirewheelBackend {
         }
 
         self.pending_music_playbacks.remove(&session_id);
-        self.stop_music_session_workers(session_id);
         self.flush_finished_workers()?;
+        let existing_worker_count = self
+            .music_session_workers
+            .get(&session_id)
+            .map(|worker_ids| worker_ids.len())
+            .unwrap_or(0);
+        if existing_worker_count > 0 {
+            self.stop_music_session_workers(session_id, 0.0);
+            self.flush_finished_workers()?;
+        }
         let schedule_internal_stop = !matches!(
             self.runtime.music_status(session_id),
             Ok(status) if status.phase == MusicPhase::PlayingBridge
@@ -996,9 +990,9 @@ impl FirewheelBackend {
                 fx_chain
                     .fx_chain
                     .set_params(params, None, &fx_chain.node_ids, cx);
+                fx_chain.fx_chain.volume_pan = params;
             },
         )?;
-
         if let Some(old_worker_id) = worker.old_worker_id {
             self.finish_worker(old_worker_id);
         }
@@ -1041,6 +1035,7 @@ impl FirewheelBackend {
                 fx_chain
                     .fx_chain
                     .set_params(params, None, &fx_chain.node_ids, cx);
+                fx_chain.fx_chain.volume_pan = params;
             },
         )?;
         self.attach_worker(instance_id, worker.worker_id);
@@ -1180,8 +1175,16 @@ impl FirewheelBackend {
             }
 
             self.pending_music_playbacks.remove(&session_id);
-            self.stop_music_session_workers(session_id);
             self.flush_finished_workers()?;
+            let existing_worker_count = self
+                .music_session_workers
+                .get(&session_id)
+                .map(|worker_ids| worker_ids.len())
+                .unwrap_or(0);
+            if existing_worker_count > 0 {
+                self.stop_music_session_workers(session_id, 0.0);
+                self.flush_finished_workers()?;
+            }
             let schedule_internal_stop = !matches!(
                 self.runtime.music_status(session_id),
                 Ok(status) if status.phase == MusicPhase::PlayingBridge
@@ -1425,26 +1428,58 @@ impl FirewheelBackend {
         Ok((asset_position_seconds - clip_base_seconds).max(0.0))
     }
 
-    fn stop_event_instance_workers(&mut self, instance_id: EventInstanceId) {
+    fn stop_event_instance_workers(&mut self, instance_id: EventInstanceId, fade_seconds: f64) {
         let worker_ids = self
             .instance_workers
             .remove(&instance_id)
             .unwrap_or_default();
         for worker_id in worker_ids {
             self.worker_instances.remove(&worker_id);
-            self.sampler_pool.stop(worker_id, None, &mut self.context);
+            self.stop_worker(worker_id, fade_seconds);
         }
     }
 
-    fn stop_music_session_workers(&mut self, session_id: MusicSessionId) {
+    fn stop_music_session_workers(&mut self, session_id: MusicSessionId, fade_seconds: f64) {
         let worker_ids = self
             .music_session_workers
             .remove(&session_id)
             .unwrap_or_default();
         for worker_id in worker_ids {
             self.worker_music_sessions.remove(&worker_id);
+            self.stop_worker(worker_id, fade_seconds);
+        }
+    }
+
+    fn stop_worker(&mut self, worker_id: WorkerID, fade_seconds: f64) {
+        if fade_seconds > 0.0 {
+            self.set_worker_volume_linear(worker_id, 0.0, fade_seconds, None);
+            let stop_time = Some(self.event_instant_after_seconds(fade_seconds));
+            self.sampler_pool
+                .stop(worker_id, stop_time, &mut self.context);
+        } else {
             self.sampler_pool.stop(worker_id, None, &mut self.context);
         }
+    }
+
+    fn set_worker_volume_linear(
+        &mut self,
+        worker_id: WorkerID,
+        volume_linear: f32,
+        smooth_seconds: f64,
+        start_time: Option<EventInstant>,
+    ) -> bool {
+        let Some(fx_state) = self.sampler_pool.fx_chain_mut(worker_id) else {
+            return false;
+        };
+
+        let mut params = fx_state.fx_chain.volume_pan;
+        params.smooth_seconds = smooth_seconds.max(0.0) as f32;
+        params.set_volume_linear(volume_linear.max(0.0));
+        fx_state
+            .fx_chain
+            .set_params(params, start_time, &fx_state.node_ids, &mut self.context);
+        fx_state.fx_chain.volume_pan = params;
+        true
     }
 
     fn flush_finished_workers(&mut self) -> Result<(), FirewheelBackendError> {
@@ -1483,7 +1518,6 @@ impl FirewheelBackend {
         let Some(session_id) = self.worker_music_sessions.remove(&worker_id) else {
             return;
         };
-
         let mut bridge_finished = false;
 
         if let Some(worker_ids) = self.music_session_workers.get_mut(&session_id) {
@@ -1503,6 +1537,7 @@ impl FirewheelBackend {
             let _ = self.sync_music_session_playback(session_id);
         }
     }
+
     fn event_instant_after_seconds(&self, delay_seconds: f64) -> EventInstant {
         EventInstant::Seconds(
             self.context.audio_clock_corrected().seconds + DurationSeconds(delay_seconds),
@@ -1561,4 +1596,13 @@ fn validate_schedule_delay_seconds(seconds: f64) -> Result<f64, FirewheelBackend
     }
 
     Ok(seconds)
+}
+
+fn normalize_fade_duration_seconds(fade: Fade) -> f64 {
+    let duration_seconds = f64::from(fade.duration_seconds);
+    if duration_seconds.is_finite() && duration_seconds > 0.0 {
+        duration_seconds
+    } else {
+        0.0
+    }
 }
