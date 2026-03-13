@@ -651,6 +651,47 @@ play(new_event)
 - CRIWARE / ADX2：`Sequence` 下显式拥有多个 `Track`，并支持 `Track transition by selector` 与 `Block playback`
 - FMOD：虽有 `logic tracks / transition timeline`，但更偏“单 event 单时间线”的 cursor 跳转，不宜作为 Sonara 的长期上层模型
 
+关于“容器内放置 Track”这一路线，可进一步收敛为：
+
+- CRIWARE / ADX2 的做法最接近 Sonara 当前想走的方向：
+  - `Cue / Sequence` 之内显式包含多个 `Track`
+  - 运行时通过 selector、beat sync、crossfade 在 track 间切换
+  - 这说明“容器拥有多个 Track”本身是成熟且可行的方案
+- Wwise 的分层更细：
+  - 更像 `Container -> Segment -> Track`
+  - 也就是说，Track 的直接父对象不一定是最高层容器，而可能是中间的 `Segment`
+- FMOD 虽然也有 `Track`，但更多是时间线轨道：
+  - 更接近未来可能的 `Lane / Arrangement Track`
+  - 不宜直接等同为 Sonara 这里的“播放层 Track”
+
+因此对 Sonara 的更具体启发是：
+
+- “容器默认拥有 1 条隐式 main track，需要时再展开多个显式 track”这条思路是可行的
+- 这一路线更接近 CRI 的 `Sequence -> Track`
+- 如果未来需要更细的 authoring 分层，再考虑往 Wwise 风格的：
+  - `Container -> Segment -> Track`
+  演进
+- 现阶段不建议直接把 `Track` 设计成 FMOD 那类“时间线轨”，否则会把播放层和编排层混在一起
+
+参考链接：
+
+- CRIWARE / ADX2
+  - Track transition by selector:
+    - https://game.criware.jp/manual/native/adx2_en/latest/criatom_tools_atomcraft_track_transition_by_selector.html
+    - https://game.criware.jp/manual/native/adx2_en/latest/criatom_tools_atomcraft_track_transition_by_selector03.html
+  - Sync change music:
+    - https://game.criware.jp/manual/adx2_tool_en/latest/craftv2_tips_performance_sync_change_music.html
+- Wwise
+  - Dynamic music design classification:
+    - https://www.audiokinetic.com/blog/about-dynamic-music-design-part-1-design-classification/
+  - Music segment practice discussion:
+    - https://www.audiokinetic.com/qa/713/automatically-loop-a-music-segment
+  - Music segment / track learning video:
+    - https://www.audiokinetic.com/learn/videos/_bvus5FIjxk/
+- FMOD
+  - Transition timeline / track behavior discussion:
+    - https://qa.fmod.com/t/track-mutes-after-transition-timeline-in-horizontal-music-event-possible-bug/23589
+
 对 Sonara 的直接启发：
 
 - 不要把未来的音乐系统锁死在“单条时间线 + cursor 跳转”上
@@ -663,6 +704,204 @@ play(new_event)
 - 其中 `Track` 更像播放控制层，`Bus` 更像混音路由层
 
 这一方向目前仍停留在设计层，不建议在 `[1][2]` MVP 尚未完全收口前立即实现。
+
+### 1.2 项目级模型示意
+
+如果把 Sonara 放进一个具有多类音乐、多个切换模式、以及大量 one-shot 特效的大项目里，更接近目标形态的整体结构可以整理为：
+
+```text
+GameAudioProject
+├── Assets
+│   ├── MusicFiles
+│   └── SfxFiles
+│
+├── Routing
+│   ├── MasterBus
+│   ├── MusicBus
+│   ├── SfxBus
+│   ├── UiBus
+│   └── SnapshotDefs
+│
+├── SharedContent
+│   ├── Clips
+│   ├── Cues
+│   ├── ResumeSlots
+│   └── SyncDomains
+│
+├── Music
+│   ├── Graph: WorldRegionA
+│   │   ├── States
+│   │   │   ├── explore                [功能1]
+│   │   │   └── combat                 [功能1]
+│   │   └── TransitionRules
+│   │       ├── explore -> combat
+│   │       └── combat -> explore
+│   │
+│   ├── Graph: BossBattleFlow
+│   │   ├── States
+│   │   │   ├── preheat                [功能2]
+│   │   │   └── combat                 [功能2]
+│   │   └── TransitionRules
+│   │       └── preheat -> combat
+│   │           ├── exit: NextMatchingCue(battle_ready)
+│   │           ├── bridge
+│   │           │   └── music_bridge -> ClipRef(boss_bridge)
+│   │           ├── stinger            [未来可加]
+│   │           │   └── music_stinger -> ClipRef(battle_start_stinger)
+│   │           └── destination: EntryCue(combat_in)
+│   │
+│   └── Graph: DayNightRegion
+│       ├── States
+│       │   ├── day                    [功能3]
+│       │   └── night                  [功能3]
+│       ├── Tracks
+│       │   ├── music_main
+│       │   ├── music_layer_1
+│       │   └── music_layer_2
+│       ├── SyncDomain
+│       │   └── day_night_region_domain
+│       └── TransitionRules
+│           ├── day -> night
+│           └── night -> day
+│
+├── Sfx
+│   ├── Event: player.footstep
+│   ├── Event: battle.hit
+│   └── Event: ui.confirm
+│
+└── Runtime
+    ├── MusicSessions
+    ├── EventInstances
+    ├── ResumeMemory
+    └── Automation        [未来]
+```
+
+这棵树对应的层次划分是：
+
+- `Assets / SharedContent`
+  - 管原始媒体、可复用 `Clip`、`Cue`、`ResumeSlot`、`SyncDomain`
+- `MusicGraph`
+  - 管音乐状态与切换
+- `Track`
+  - 管哪些内容在哪条播放层上发声
+- `TransitionRule`
+  - 管一次切换的退出点、bridge、stinger、目标进入方式
+- `Sfx Event`
+  - 管不属于持续音乐会话的普通 one-shot / 随机 / 条件音效
+- `Runtime`
+  - 管真实会话、实例、记忆、以及未来的参数自动化
+
+按功能映射：
+
+- `[1]` 主要落在：
+  - `MusicGraph.State.memory_slot`
+  - `default_entry`
+  - `Runtime.ResumeMemory`
+- `[2]` 主要落在：
+  - `TransitionRule.exit`
+  - `bridge`
+  - `destination`
+  - `MusicSession.phase / pending_transition`
+- `[3]` 主要落在：
+  - `Track`
+  - `SyncDomain`
+  - `SameSyncPosition`
+  - 将来的 `Stem / Variant` 绑定
+
+对当前 Sonara 的直接启发：
+
+- 现有 `Event` 系统仍适合承载大量 one-shot / 条件触发音效
+- 交互音乐应逐步收敛到 `MusicGraph` 主线
+- `Track` 更适合先作为音乐层扩展，而不是立刻推广到所有音频对象
+- 长远上，`Runtime` 需要同时容纳：
+  - `MusicSession`
+  - `EventInstance`
+  - `Automation`
+  这三类并行概念
+
+### 1.3 现有对象盘点与缺口清单
+
+按当前代码现状，Sonara 已经拥有音乐系统的基础骨架，不需要从零重新定义整套模型。更现实的工作方式是：
+
+- 盘点哪些对象已经存在
+- 补齐真正还缺的那一小层
+- 明确哪些想法先暂缓
+
+当前已经有的模型对象：
+
+- `Clip`
+  - `asset_id`
+  - `source_range`
+  - `loop_range`
+  - `cues`
+  - `sync_domain`
+- `CuePoint`
+- `ResumeSlot`
+- `SyncDomain`
+- `SyncPoint`
+- `MusicGraph`
+- `MusicStateNode`
+- `PlaybackTarget`
+  - 当前只有 `Clip { clip_id }`
+- `EntryPolicy`
+- `ExitPolicy`
+- `MemoryPolicy`
+- `TransitionRule`
+
+当前已经有的运行时对象：
+
+- `MusicSession`
+- `PendingMusicTransition`
+- `MusicStatus`
+- `ResumeMemory`
+- cue 查找与 bridge 状态推进
+
+下一批真正缺失、但最值得补的对象：
+
+- `MusicTrack`
+  - 例如：
+    - `music_main`
+    - `music_bridge`
+    - `music_stinger`
+- `TrackRole`
+- `TrackBinding`
+  - 把内容绑定到某条 `Track`
+- `TransitionRule.stinger`
+- `stinger_timing`
+- 更丰富的 `PlaybackTarget`
+  - 例如：
+    - `SyncVariantSet`
+    - `StemSet`
+
+当前明确暂缓的对象：
+
+- `Lane`
+- `ClipPlacement`
+- 完整 timeline authoring
+- 完整参数自动化系统
+- 完整的 `[3]` 同步变体运行时
+
+因此下一阶段更合理的策略不是“重写音乐模型”，而是：
+
+1. 保留现有：
+   - `MusicGraph`
+   - `MusicStateNode`
+   - `TransitionRule`
+   - `Clip`
+   - `Cue`
+   - `ResumeSlot`
+   - `SyncDomain`
+2. 在其上新增：
+   - `MusicTrack`
+   - `TrackBinding`
+3. 再逐步扩展：
+   - `stinger`
+   - `SyncVariantSet / StemSet`
+
+一句话总结：
+
+- 现阶段不是“设计整个世界”
+- 而是“在已有骨架上补 `Track` 这一层”
 
 ### 阶段 2：Runtime / Backend Transport 基础（进行中）
 
