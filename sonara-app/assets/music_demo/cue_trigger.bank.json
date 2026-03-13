@@ -9,7 +9,8 @@
       "clips": [
         "019ce700-0000-7000-8000-000000000101",
         "019ce700-0000-7000-8000-000000000102",
-        "019ce700-0000-7000-8000-000000000103"
+        "019ce700-0000-7000-8000-000000000103",
+        "019ce700-0000-7000-8000-000000000104"
       ],
       "resume_slots": [],
       "sync_domains": [],
@@ -48,9 +49,21 @@
             "target_sample_rate": null
           },
           "streaming": "Auto"
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000302",
+          "name": "footstep_stone",
+          "source_path": "sonara-app/assets/demo/footstep_stone.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
         }
       ],
-      "resident_media": [],
+      "resident_media": [
+        "019ce700-0000-7000-8000-000000000302"
+      ],
       "streaming_media": [
         "019cdd00-3ff9-7bd3-8512-229ff9a77dad",
         "019cdd00-60a5-7500-94be-6ee2074da8a6",
@@ -139,6 +152,15 @@
         }
       ],
       "sync_domain": null
+    },
+    {
+      "id": "019ce700-0000-7000-8000-000000000104",
+      "name": "combat_stinger",
+      "asset_id": "019ce700-0000-7000-8000-000000000302",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
     }
   ],
   "resume_slots": [],
@@ -158,6 +180,11 @@
           "id": "019ce700-0000-7000-8000-000000000602",
           "name": "music_bridge",
           "role": "Bridge"
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000603",
+          "name": "music_stinger",
+          "role": "Stinger"
         }
       ],
       "states": [
@@ -226,7 +253,7 @@
             }
           },
           "bridge_clip": "019ce700-0000-7000-8000-000000000102",
-          "stinger_clip": null,
+          "stinger_clip": "019ce700-0000-7000-8000-000000000104",
           "destination": {
             "EntryCue": {
               "tag": "combat_in"

@@ -20,8 +20,8 @@ use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
-    MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
-    SyncDomain, TrackId,
+    ExitPolicy, MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot,
+    Snapshot, SyncDomain, TrackId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, MusicPhase,
@@ -421,7 +421,11 @@ impl FirewheelBackend {
         self.runtime.request_music_state(session_id, target_state)?;
         self.sync_music_session_playback(session_id)?;
         if let Some(transition) = preview {
-            if transition.bridge_clip.is_none() {
+            if transition.bridge_clip.is_some() {
+                if transition.exit == ExitPolicy::Immediate {
+                    self.play_pending_transition_stinger(session_id, &transition)?;
+                }
+            } else {
                 self.play_pending_transition_stinger(session_id, &transition)?;
             }
         }
@@ -438,7 +442,9 @@ impl FirewheelBackend {
         self.runtime.complete_music_exit(session_id)?;
         self.sync_music_session_playback(session_id)?;
         if let Some(transition) = pending {
-            if transition.bridge_clip.is_none() {
+            if transition.bridge_clip.is_some() {
+                self.play_pending_transition_stinger(session_id, &transition)?;
+            } else {
                 self.play_pending_transition_stinger(session_id, &transition)?;
             }
         }
@@ -450,13 +456,8 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
-        let pending = self.runtime.music_status(session_id)?.pending_transition;
         self.runtime.complete_music_bridge(session_id)?;
-        self.sync_music_session_playback(session_id)?;
-        if let Some(transition) = pending {
-            self.play_pending_transition_stinger(session_id, &transition)?;
-        }
-        Ok(())
+        self.sync_music_session_playback(session_id)
     }
 
     /// 停止一个音乐会话。
