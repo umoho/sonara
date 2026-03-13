@@ -3,10 +3,14 @@ use sonara_bevy::MusicPhase;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
 use sonara_model::{
-    Bank, Clip, CuePoint, EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph, MusicGraphId,
-    MusicStateId, MusicStateNode, PlaybackTarget, TimeRange, TransitionRule,
+    Bank, BankAsset, Clip, CuePoint, EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph,
+    MusicGraphId, MusicStateId, MusicStateNode, PlaybackTarget, StreamingMode, TimeRange,
+    TransitionRule,
 };
 use sonara_runtime::{Fade, MusicSessionId};
+
+const COMBAT_ASSET_NAME: &str = "rochick-boss-battle-279647";
+const COMBAT_ASSET_PATH: &str = "private_assets/rochick-boss-battle-279647.mp3";
 
 fn main() {
     App::new()
@@ -63,17 +67,26 @@ fn setup_scene(
     let package =
         CompiledBankPackage::read_json_file("sonara-app/assets/music_demo/core.bank.json")
             .expect("music demo compiled bank should load from JSON");
-    let manifest = package.bank.manifest.clone();
+    let mut manifest = package.bank.manifest.clone();
     let preheat_asset = manifest
         .assets
         .first()
         .cloned()
         .expect("music demo should contain preheat asset");
-    let combat_asset = manifest
+    let bridge_asset = manifest
         .assets
         .get(1)
         .cloned()
-        .expect("music demo should contain combat asset");
+        .expect("music demo should contain bridge asset");
+    let combat_asset = BankAsset {
+        id: uuid::Uuid::now_v7(),
+        name: COMBAT_ASSET_NAME.into(),
+        source_path: COMBAT_ASSET_PATH.into(),
+        import_settings: bridge_asset.import_settings.clone(),
+        streaming: StreamingMode::Auto,
+    };
+    manifest.assets.push(combat_asset.clone());
+    manifest.streaming_media.push(combat_asset.id);
 
     let mut preheat_clip = Clip::new("preheat_loop", preheat_asset.id);
     preheat_clip.loop_range = Some(TimeRange::new(0.0, 1.0));
@@ -82,7 +95,7 @@ fn setup_scene(
     let bridge_clip = Clip {
         id: sonara_model::ClipId::new(),
         name: "combat_bridge".into(),
-        asset_id: combat_asset.id,
+        asset_id: bridge_asset.id,
         source_range: Some(TimeRange::new(0.0, 3.0)),
         loop_range: None,
         cues: Vec::new(),
