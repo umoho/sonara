@@ -1009,6 +1009,130 @@ struct TrackBinding {
    - `StemSet`
    - 更完整的 `PlaybackTarget`
 
+### 1.5 Bridge / Stinger 的节点化模型
+
+在继续讨论 `Track` 之后，一个更自然、也更接近 Unity Animator 这类状态机编辑器的长期方向是：
+
+- `bridge` 不再被理解成“边上的一段 clip”
+- `bridge` 是一个**自动转移节点**
+- `stinger` 不再是独立特判
+- `stinger` 是**同一节点上另一条 track 的一段素材**
+- 边只负责“什么时候能走过去”
+
+更清晰的图模型应接近：
+
+```text
+preheat (Stable)
+  -- NextMatchingCue(battle_ready) -->
+bridge (Transition)
+  -- OnComplete -->
+combat (Stable)
+```
+
+其中 `bridge` 节点本身可以携带多条 track：
+
+```text
+bridge (Transition)
+├── music_bridge  -> ClipRef(boss_bridge)
+└── music_stinger -> ClipRef(battle_start_stinger)
+```
+
+这样做的直接好处是：
+
+- 所有真正会发声的内容都落在**节点**上
+- 边只表达：
+  - `NextCue`
+  - `Immediate`
+  - `OnComplete`
+  这类转移条件
+- `bridge_clip` 与 `stinger_clip` 都不必再挂在边上做特判
+- backend 也不需要再猜：
+  - stinger 是在 `bridge` 开始时播
+  - 还是在目标状态接管时播
+
+这版模型更适合整理成：
+
+```text
+MusicGraph
+├── Nodes
+│   ├── preheat   (Stable)
+│   ├── bridge    (Transition)
+│   └── combat    (Stable)
+└── Edges
+    ├── preheat -> bridge   [NextMatchingCue(battle_ready)]
+    └── bridge  -> combat   [OnComplete]
+```
+
+也就是说：
+
+- 节点负责：
+  - 自己要播什么内容
+  - 这些内容落在哪些 track
+  - 是否需要 memory / entry 等局部语义
+- 边负责：
+  - 从一个节点到下一个节点的转移条件
+
+这一模型还能顺手统一当前的 `stinger` 问题：
+
+- `stinger` 不是“额外时机规则”
+- 它只是 `bridge` 节点上 `music_stinger` track 的一段素材
+- 进入 `bridge` 节点时，同步启动该节点上的多条 track 即可
+
+这里还需要补一个关键概念：
+
+- `primary_track`
+- 或 `completion_source`
+
+原因是 `bridge` 节点中可能同时存在：
+
+- `music_bridge`
+- `music_stinger`
+
+但节点何时算“完成”，通常不应由所有 track 一起决定，而应由主导内容决定。对大多数 `bridge` 节点而言，通常是：
+
+- `music_bridge` 负责驱动节点完成
+- `music_stinger` 只是伴随层，不决定自动转移时机
+
+因此更完整的节点语义应接近：
+
+```text
+TransitionNode
+├── TrackBindings
+│   ├── music_bridge  -> ClipRef(...)
+│   └── music_stinger -> ClipRef(...)
+└── completion_source: music_bridge
+```
+
+对当前实现的启发是：
+
+- 当前把 `bridge_clip / stinger_clip` 放在 `TransitionRule` 上，是为了 `[2]` 的 MVP 尽快跑通
+- 但长期上，更优雅的终态应是：
+  - `bridge` 升格成过渡节点
+  - `stinger` 归入该节点的另一条 track
+  - 边只保留转移条件
+
+因此后续如果继续演进，推荐目标不是“继续把边上的字段堆得更复杂”，而是：
+
+1. 引入中性的 `MusicNode`
+2. 区分：
+   - `Stable`
+   - `Transition`
+   - 未来可选 `Transient`
+3. 把 `bridge` 迁移为 `Transition` 节点
+4. 把 `stinger` 迁移为该节点上的 `music_stinger` track 内容
+5. 让 `Edge` 只负责：
+   - `NextCue`
+   - `Immediate`
+   - `OnComplete`
+
+一句话总结：
+
+- 当前实现把 `bridge` 当作“边上的内容”是 MVP 捷径
+- 长期更推荐：
+  - **所有可播放内容都是节点**
+  - **所有转移条件都放在边上**
+  - **stinger 是节点内部的另一条 track，而不是额外特判**
+
 ### 阶段 2：Runtime / Backend Transport 基础（进行中）
 
 目标：
