@@ -30,9 +30,11 @@ define_id!(ClipId);
 define_id!(CueId);
 define_id!(EventId);
 define_id!(MusicGraphId);
-define_id!(MusicStateId);
+define_id!(MusicNodeId);
 define_id!(ParameterId);
 define_id!(ResumeSlotId);
 define_id!(SnapshotId);
 define_id!(SyncDomainId);
 define_id!(TrackId);
+
+pub type MusicStateId = MusicNodeId;

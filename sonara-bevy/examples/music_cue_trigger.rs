@@ -67,13 +67,13 @@ fn setup_scene(
         .expect("cue trigger bank should contain a music graph");
     state.graph_id = graph.id;
     state.preheat_state = graph
-        .states
+        .nodes
         .iter()
         .find(|music_state| music_state.name == "preheat")
         .map(|music_state| music_state.id)
         .expect("cue trigger graph should contain preheat state");
     state.combat_state = graph
-        .states
+        .nodes
         .iter()
         .find(|music_state| music_state.name == "combat")
         .map(|music_state| music_state.id)

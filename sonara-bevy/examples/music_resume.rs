@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
 use sonara_model::{
-    Bank, Clip, EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode,
+    Bank, Clip, EdgeTrigger, EntryPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode,
     PlaybackTarget, ResumeSlot, Track, TrackBinding, TrackRole, TransitionRule,
 };
 use sonara_runtime::MusicSessionId;
@@ -90,9 +90,9 @@ fn setup_scene(
     let combat_slot = ResumeSlot::new("combat_memory");
     let main_track = Track::new("music_main", TrackRole::Main);
     let mut graph = MusicGraph::new("resume_demo");
-    graph.initial_state = Some(state.explore_state);
+    graph.initial_node = Some(state.explore_state);
     graph.tracks.push(main_track.clone());
-    graph.states.push(MusicStateNode {
+    graph.nodes.push(MusicStateNode {
         id: state.explore_state,
         name: "explore".into(),
         target: PlaybackTarget::Clip {
@@ -110,8 +110,10 @@ fn setup_scene(
             reset_to: EntryPolicy::ClipStart,
         },
         default_entry: EntryPolicy::Resume,
+        externally_targetable: true,
+        completion_source: None,
     });
-    graph.states.push(MusicStateNode {
+    graph.nodes.push(MusicStateNode {
         id: state.combat_state,
         name: "combat".into(),
         target: PlaybackTarget::Clip {
@@ -129,19 +131,25 @@ fn setup_scene(
             reset_to: EntryPolicy::ClipStart,
         },
         default_entry: EntryPolicy::Resume,
+        externally_targetable: true,
+        completion_source: None,
     });
-    graph.transitions.push(TransitionRule {
+    graph.edges.push(TransitionRule {
         from: state.explore_state,
         to: state.combat_state,
-        exit: ExitPolicy::Immediate,
+        requested_target: None,
+        trigger: EdgeTrigger::Immediate,
+        exit: None,
         bridge_clip: None,
         stinger_clip: None,
         destination: EntryPolicy::Resume,
     });
-    graph.transitions.push(TransitionRule {
+    graph.edges.push(TransitionRule {
         from: state.combat_state,
         to: state.explore_state,
-        exit: ExitPolicy::Immediate,
+        requested_target: None,
+        trigger: EdgeTrigger::Immediate,
+        exit: None,
         bridge_clip: None,
         stinger_clip: None,
         destination: EntryPolicy::Resume,

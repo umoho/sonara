@@ -20,8 +20,8 @@ use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
-    ExitPolicy, MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot,
-    Snapshot, SyncDomain, TrackId,
+    MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
+    SyncDomain, TrackId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, MusicPhase,
@@ -414,21 +414,10 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
         target_state: MusicStateId,
     ) -> Result<(), FirewheelBackendError> {
-        let preview = self
-            .runtime
-            .preview_music_transition(session_id, target_state)?;
         self.save_music_session_resume_position(session_id)?;
         self.runtime.request_music_state(session_id, target_state)?;
         self.sync_music_session_playback(session_id)?;
-        if let Some(transition) = preview {
-            if transition.bridge_clip.is_some() {
-                if transition.exit == ExitPolicy::Immediate {
-                    self.play_pending_transition_stinger(session_id, &transition)?;
-                }
-            } else {
-                self.play_pending_transition_stinger(session_id, &transition)?;
-            }
-        }
+        self.play_active_node_stinger(session_id)?;
         Ok(())
     }
 
@@ -437,17 +426,10 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
-        let pending = self.runtime.music_status(session_id)?.pending_transition;
         self.save_music_session_resume_position(session_id)?;
         self.runtime.complete_music_exit(session_id)?;
         self.sync_music_session_playback(session_id)?;
-        if let Some(transition) = pending {
-            if transition.bridge_clip.is_some() {
-                self.play_pending_transition_stinger(session_id, &transition)?;
-            } else {
-                self.play_pending_transition_stinger(session_id, &transition)?;
-            }
-        }
+        self.play_active_node_stinger(session_id)?;
         Ok(())
     }
 
@@ -457,7 +439,9 @@ impl FirewheelBackend {
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
         self.runtime.complete_music_bridge(session_id)?;
-        self.sync_music_session_playback(session_id)
+        self.sync_music_session_playback(session_id)?;
+        self.play_active_node_stinger(session_id)?;
+        Ok(())
     }
 
     /// 停止一个音乐会话。
@@ -1461,16 +1445,16 @@ impl FirewheelBackend {
             .push(worker_id);
     }
 
-    fn play_pending_transition_stinger(
+    fn play_active_node_stinger(
         &mut self,
         session_id: MusicSessionId,
-        transition: &sonara_runtime::PendingMusicTransition,
     ) -> Result<(), FirewheelBackendError> {
-        let Some(clip_id) = transition.stinger_clip else {
+        let Some(resolved_music) = self.runtime.resolve_music_stinger_playback(session_id)? else {
             return Ok(());
         };
 
-        let mut resolved = self.resolve_clip_playback(clip_id, 0.0)?;
+        let mut resolved = self
+            .resolve_clip_playback(resolved_music.clip_id, resolved_music.entry_offset_seconds)?;
         resolved.repeat_mode = RepeatMode::PlayOnce;
 
         if !self.prepare_asset_for_playback(resolved.asset_id)? {

@@ -398,6 +398,12 @@ play(new_event)
     - `MusicGraph`
     - `Track`
     - `TrackBinding`
+  - `MusicGraph` 已开始从旧的
+    - `MusicStateNode + TransitionRule`
+    向新的
+    - `MusicNode + MusicEdge`
+    收敛
+  - 当前代码仍保留少量兼容字段，便于现有 bank / example 平滑迁移
 - `阶段 2` 进行中
   - 已完成：
     - 打开 Firewheel 的 `scheduled_events` / `musical_transport`
@@ -447,12 +453,15 @@ play(new_event)
       - `ResolvedMusicPlayback` 会带上当前 `track_id`
       - `PlayingBridge` 阶段会解析到 `Bridge` track
       - Firewheel backend 已按 `session + track` 记住当前激活的音乐内容
-    - `TransitionRule.stinger_clip` 已接入第一版执行链
-      - build 会校验 stinger clip 依赖
-      - runtime 会为 transition 解析 `stinger_track_id`
-      - backend 会在目标状态接管时触发 stinger
+    - 节点化重构已经开始落代码
+      - `bridge` 已能通过显式 `Transition` 风格节点 + `OnComplete` 边来表达
+      - runtime 的 bridge 生命周期测试已迁到显式节点模型
+      - `stinger` 已开始从“边字段特判”转向“当前活动节点上的 `Stinger` track 绑定”
+      - `resolve_music_stinger_playback(...)` 已按活动节点解析 stinger，而不是按 pending transition 猜测
     - `pending media` 延后启动路径已稳定
   - 仍未完成：
+    - 彻底删除旧的 `bridge_clip / stinger_clip` 兼容字段
+    - runtime / backend 全面改成 `active_node + edge trigger` 语义
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`
     - `SyncDomain` 驱动的同步变体切换

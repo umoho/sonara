@@ -169,7 +169,7 @@
     {
       "id": "019ce700-0000-7000-8000-000000000201",
       "name": "cue_trigger",
-      "initial_state": "019ce700-0000-7000-8000-000000000501",
+      "initial_node": "019ce700-0000-7000-8000-000000000501",
       "tracks": [
         {
           "id": "019ce700-0000-7000-8000-000000000601",
@@ -187,7 +187,7 @@
           "role": "Stinger"
         }
       ],
-      "states": [
+      "nodes": [
         {
           "id": "019ce700-0000-7000-8000-000000000501",
           "name": "preheat",
@@ -211,7 +211,44 @@
             "ttl_seconds": null,
             "reset_to": "ClipStart"
           },
-          "default_entry": "ClipStart"
+          "default_entry": "ClipStart",
+          "externally_targetable": true,
+          "completion_source": null
+        },
+        {
+          "id": "019ce700-0000-7000-8000-000000000503",
+          "name": "bridge",
+          "target": {
+            "Clip": {
+              "clip_id": "019ce700-0000-7000-8000-000000000102"
+            }
+          },
+          "bindings": [
+            {
+              "track_id": "019ce700-0000-7000-8000-000000000602",
+              "target": {
+                "Clip": {
+                  "clip_id": "019ce700-0000-7000-8000-000000000102"
+                }
+              }
+            },
+            {
+              "track_id": "019ce700-0000-7000-8000-000000000603",
+              "target": {
+                "Clip": {
+                  "clip_id": "019ce700-0000-7000-8000-000000000104"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": false,
+          "completion_source": "019ce700-0000-7000-8000-000000000602"
         },
         {
           "id": "019ce700-0000-7000-8000-000000000502",
@@ -240,20 +277,28 @@
             "EntryCue": {
               "tag": "combat_in"
             }
-          }
+          },
+          "externally_targetable": true,
+          "completion_source": null
         }
       ],
-      "transitions": [
+      "edges": [
         {
           "from": "019ce700-0000-7000-8000-000000000501",
-          "to": "019ce700-0000-7000-8000-000000000502",
-          "exit": {
+          "to": "019ce700-0000-7000-8000-000000000503",
+          "requested_target": "019ce700-0000-7000-8000-000000000502",
+          "trigger": {
             "NextMatchingCue": {
               "tag": "battle_ready"
             }
           },
-          "bridge_clip": "019ce700-0000-7000-8000-000000000102",
-          "stinger_clip": "019ce700-0000-7000-8000-000000000104",
+          "destination": "ClipStart"
+        },
+        {
+          "from": "019ce700-0000-7000-8000-000000000503",
+          "to": "019ce700-0000-7000-8000-000000000502",
+          "requested_target": "019ce700-0000-7000-8000-000000000502",
+          "trigger": "OnComplete",
           "destination": {
             "EntryCue": {
               "tag": "combat_in"

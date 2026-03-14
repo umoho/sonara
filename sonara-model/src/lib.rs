@@ -22,12 +22,12 @@ pub use event::{
     RandomNode, SamplerNode, SequenceNode, SpatialMode, SwitchCase, SwitchNode,
 };
 pub use ids::{
-    BankId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicStateId, ParameterId, ResumeSlotId,
-    SnapshotId, SyncDomainId, TrackId,
+    BankId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicNodeId, MusicStateId, ParameterId,
+    ResumeSlotId, SnapshotId, SyncDomainId, TrackId,
 };
 pub use music::{
-    EntryPolicy, ExitPolicy, MemoryPolicy, MusicGraph, MusicStateNode, PlaybackTarget, Track,
-    TrackBinding, TrackRole, TransitionRule,
+    EdgeTrigger, EntryPolicy, ExitPolicy, MemoryPolicy, MusicEdge, MusicGraph, MusicNode,
+    MusicStateNode, PlaybackTarget, Track, TrackBinding, TrackRole, TransitionRule,
 };
 pub use parameter::{
     BoolParameter, EnumParameter, FloatParameter, Parameter, ParameterDefaultValue, ParameterKind,

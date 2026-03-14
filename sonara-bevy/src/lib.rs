@@ -670,7 +670,7 @@ mod tests {
     use sonara_model::{
         Clip, EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
         MusicStateId, MusicStateNode, NodeId, NodeRef, PlaybackTarget, SamplerNode, SpatialMode,
-        SwitchCase, SwitchNode, TransitionRule,
+        SwitchCase, SwitchNode, Track, TrackBinding, TrackRole, TransitionRule,
     };
     use uuid::Uuid;
 
@@ -715,38 +715,87 @@ mod tests {
         let bridge_clip = Clip::new("preheat_to_boss", Uuid::now_v7());
         let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
         let preheat_state = MusicStateId::new();
+        let bridge_state = MusicStateId::new();
         let boss_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let bridge_track = Track::new("music_bridge", TrackRole::Bridge);
         let mut graph = MusicGraph::new("boss_music");
-        graph.initial_state = Some(preheat_state);
-        graph.states.push(MusicStateNode {
+        graph.initial_node = Some(preheat_state);
+        graph.tracks.push(main_track.clone());
+        graph.tracks.push(bridge_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
             target: PlaybackTarget::Clip {
                 clip_id: preheat_clip.id,
             },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: preheat_clip.id,
+                },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
         });
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
+            id: bridge_state,
+            name: "bridge".into(),
+            target: PlaybackTarget::Clip {
+                clip_id: bridge_clip.id,
+            },
+            bindings: vec![TrackBinding {
+                track_id: bridge_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: bridge_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: false,
+            completion_source: Some(bridge_track.id),
+        });
+        graph.nodes.push(MusicStateNode {
             id: boss_state,
             name: "boss".into(),
             target: PlaybackTarget::Clip {
                 clip_id: boss_clip.id,
             },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: boss_clip.id,
+                },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
         });
-        graph.transitions.push(TransitionRule {
+        graph.edges.push(TransitionRule {
             from: preheat_state,
-            to: boss_state,
-            exit: ExitPolicy::NextMatchingCue {
+            to: bridge_state,
+            requested_target: Some(boss_state),
+            trigger: ExitPolicy::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
-            bridge_clip: Some(bridge_clip.id),
+            exit: None,
+            bridge_clip: None,
+            stinger_clip: None,
+            destination: EntryPolicy::ClipStart,
+        });
+        graph.edges.push(TransitionRule {
+            from: bridge_state,
+            to: boss_state,
+            requested_target: Some(boss_state),
+            trigger: ExitPolicy::OnComplete,
+            exit: None,
+            bridge_clip: None,
             stinger_clip: None,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),

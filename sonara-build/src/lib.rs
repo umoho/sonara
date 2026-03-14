@@ -55,13 +55,13 @@ pub enum BuildError {
     SwitchParameterNotEnum,
     #[error("事件 switch 引用了参数中不存在的枚举值")]
     UnknownSwitchVariant,
-    #[error("music graph 必须至少包含一个 state")]
+    #[error("music graph 必须至少包含一个 node")]
     EmptyMusicGraph,
-    #[error("music graph 中存在重复 state ID")]
+    #[error("music graph 中存在重复 node ID")]
     DuplicateMusicStateId,
     #[error("music graph 中存在重复 track ID")]
     DuplicateTrackId,
-    #[error("music graph 引用了不存在的 state")]
+    #[error("music graph 引用了不存在的 node")]
     MissingMusicStateDefinition,
     #[error("music graph 引用了不存在的 track")]
     MissingTrackDefinition,
@@ -71,8 +71,12 @@ pub enum BuildError {
     MissingResumeSlotDefinition,
     #[error("clip 引用了不存在的 sync domain")]
     MissingSyncDomainDefinition,
-    #[error("music state 中存在重复 track binding")]
+    #[error("music node 中存在重复 track binding")]
     DuplicateTrackBinding,
+    #[error("music node 必须至少绑定一个 playback target")]
+    EmptyMusicNode,
+    #[error("music node 的 completion_source 没有对应的 track binding")]
+    MissingCompletionTrackBinding,
 }
 
 /// compiled bank 文件的最小 IO 错误。
@@ -631,11 +635,11 @@ fn validate_music_graph(
     resume_slot_by_id: &HashMap<ResumeSlotId, &ResumeSlot>,
     sync_domain_by_id: &HashMap<SyncDomainId, &SyncDomain>,
 ) -> Result<MusicGraphDependencies, BuildError> {
-    if graph.states.is_empty() {
+    if graph.all_nodes().is_empty() {
         return Err(BuildError::EmptyMusicGraph);
     }
 
-    let mut state_ids = HashSet::new();
+    let mut node_ids = HashSet::new();
     let mut track_ids = HashSet::new();
     let mut dependencies = MusicGraphDependencies::default();
 
@@ -645,34 +649,24 @@ fn validate_music_graph(
         }
     }
 
-    for state in &graph.states {
-        if !state_ids.insert(state.id) {
+    for node in graph.all_nodes() {
+        if !node_ids.insert(node.id) {
             return Err(BuildError::DuplicateMusicStateId);
         }
 
-        if let Some(memory_slot) = state.memory_slot {
+        if node.bindings.is_empty() {
+            return Err(BuildError::EmptyMusicNode);
+        }
+
+        if let Some(memory_slot) = node.memory_slot {
             if !resume_slot_by_id.contains_key(&memory_slot) {
                 return Err(BuildError::MissingResumeSlotDefinition);
             }
             push_unique(&mut dependencies.resume_slot_ids, memory_slot);
         }
 
-        for clip_id in state.target.clip_ids() {
-            let clip = clip_by_id
-                .get(&clip_id)
-                .ok_or(BuildError::MissingClipDefinition)?;
-            push_unique(&mut dependencies.clip_ids, clip_id);
-
-            if let Some(sync_domain_id) = clip.sync_domain {
-                if !sync_domain_by_id.contains_key(&sync_domain_id) {
-                    return Err(BuildError::MissingSyncDomainDefinition);
-                }
-                push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
-            }
-        }
-
         let mut state_binding_track_ids = HashSet::<TrackId>::new();
-        for binding in &state.bindings {
+        for binding in &node.bindings {
             if !track_ids.contains(&binding.track_id) {
                 return Err(BuildError::MissingTrackDefinition);
             }
@@ -694,44 +688,31 @@ fn validate_music_graph(
                 }
             }
         }
-    }
 
-    if let Some(initial_state) = graph.initial_state {
-        if !state_ids.contains(&initial_state) {
-            return Err(BuildError::MissingMusicStateDefinition);
-        }
-    }
-
-    for transition in &graph.transitions {
-        if !state_ids.contains(&transition.from) || !state_ids.contains(&transition.to) {
-            return Err(BuildError::MissingMusicStateDefinition);
-        }
-
-        if let Some(bridge_clip) = transition.bridge_clip {
-            let clip = clip_by_id
-                .get(&bridge_clip)
-                .ok_or(BuildError::MissingClipDefinition)?;
-            push_unique(&mut dependencies.clip_ids, bridge_clip);
-
-            if let Some(sync_domain_id) = clip.sync_domain {
-                if !sync_domain_by_id.contains_key(&sync_domain_id) {
-                    return Err(BuildError::MissingSyncDomainDefinition);
-                }
-                push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+        if let Some(completion_source) = node.completion_source {
+            if !node
+                .bindings
+                .iter()
+                .any(|binding| binding.track_id == completion_source)
+            {
+                return Err(BuildError::MissingCompletionTrackBinding);
             }
         }
+    }
 
-        if let Some(stinger_clip) = transition.stinger_clip {
-            let clip = clip_by_id
-                .get(&stinger_clip)
-                .ok_or(BuildError::MissingClipDefinition)?;
-            push_unique(&mut dependencies.clip_ids, stinger_clip);
+    if let Some(initial_node) = graph.start_node() {
+        if !node_ids.contains(&initial_node) {
+            return Err(BuildError::MissingMusicStateDefinition);
+        }
+    }
 
-            if let Some(sync_domain_id) = clip.sync_domain {
-                if !sync_domain_by_id.contains_key(&sync_domain_id) {
-                    return Err(BuildError::MissingSyncDomainDefinition);
-                }
-                push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+    for edge in graph.all_edges() {
+        if !node_ids.contains(&edge.from) || !node_ids.contains(&edge.to) {
+            return Err(BuildError::MissingMusicStateDefinition);
+        }
+        if let Some(requested_target) = edge.requested_target {
+            if !node_ids.contains(&requested_target) {
+                return Err(BuildError::MissingMusicStateDefinition);
             }
         }
     }
@@ -1250,27 +1231,36 @@ mod tests {
         clip.sync_domain = Some(sync_domain.id);
         let resume_slot = ResumeSlot::new("boss_memory");
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_flow");
-        graph.initial_state = Some(state_id);
+        graph.initial_node = Some(state_id);
+        graph.tracks.push(main_track.clone());
         graph.states.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
             target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(12.0),
                 reset_to: EntryPolicy::ClipStart,
             },
             default_entry: EntryPolicy::Resume,
+            externally_targetable: true,
+            completion_source: None,
         });
         graph.transitions.push(TransitionRule {
             from: state_id,
             to: state_id,
-            exit: ExitPolicy::NextMatchingCue {
+            requested_target: None,
+            trigger: ExitPolicy::NextMatchingCue {
                 tag: "loop_out".into(),
             },
-            bridge_clip: Some(clip.id),
+            exit: None,
+            bridge_clip: None,
             stinger_clip: None,
             destination: EntryPolicy::SameSyncPosition,
         });
@@ -1306,18 +1296,27 @@ mod tests {
         let resume_slot = ResumeSlot::new("boss_memory");
         let state_id = MusicStateId::new();
         let missing_clip_id = sonara_model::ClipId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_flow");
-        graph.initial_state = Some(state_id);
+        graph.initial_node = Some(state_id);
+        graph.tracks.push(main_track.clone());
         graph.states.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
             target: PlaybackTarget::Clip {
                 clip_id: missing_clip_id,
             },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: missing_clip_id,
+                },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
         });
 
         let mut project = AuthoringProject::new("demo");
@@ -1340,7 +1339,7 @@ mod tests {
         let state_id = MusicStateId::new();
         let missing_track_id = Track::new("main", TrackRole::Main).id;
         let mut graph = MusicGraph::new("boss_flow");
-        graph.initial_state = Some(state_id);
+        graph.initial_node = Some(state_id);
         graph.states.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
@@ -1352,6 +1351,8 @@ mod tests {
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
         });
 
         let mut project = AuthoringProject::new("demo");
