@@ -36,5 +36,3 @@ define_id!(ResumeSlotId);
 define_id!(SnapshotId);
 define_id!(SyncDomainId);
 define_id!(TrackId);
-
-pub type MusicStateId = MusicNodeId;

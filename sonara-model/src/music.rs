@@ -218,7 +218,3 @@ pub struct MusicEdge {
     #[serde(default)]
     pub destination: EntryPolicy,
 }
-
-pub type MusicStateNode = MusicNode;
-pub type TransitionRule = MusicEdge;
-pub type ExitPolicy = EdgeTrigger;

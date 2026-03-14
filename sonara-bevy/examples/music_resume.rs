@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
 use sonara_model::{
-    Bank, Clip, EdgeTrigger, EntryPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode,
-    PlaybackTarget, ResumeSlot, Track, TrackBinding, TrackRole, TransitionRule,
+    Bank, Clip, EdgeTrigger, EntryPolicy, MemoryPolicy, MusicEdge, MusicGraph, MusicNode,
+    MusicNodeId, PlaybackTarget, ResumeSlot, Track, TrackBinding, TrackRole,
 };
 use sonara_runtime::MusicSessionId;
 
@@ -40,8 +40,8 @@ struct HudText;
 #[derive(Resource)]
 struct ResumeZoneState {
     session_id: Option<MusicSessionId>,
-    explore_state: MusicStateId,
-    combat_state: MusicStateId,
+    explore_state: MusicNodeId,
+    combat_state: MusicNodeId,
     inside_zone: bool,
     explore_left_at: Option<f64>,
     combat_left_at: Option<f64>,
@@ -52,8 +52,8 @@ impl Default for ResumeZoneState {
     fn default() -> Self {
         Self {
             session_id: None,
-            explore_state: MusicStateId::new(),
-            combat_state: MusicStateId::new(),
+            explore_state: MusicNodeId::new(),
+            combat_state: MusicNodeId::new(),
             inside_zone: false,
             explore_left_at: None,
             combat_left_at: None,
@@ -92,7 +92,7 @@ fn setup_scene(
     let mut graph = MusicGraph::new("resume_demo");
     graph.initial_node = Some(state.explore_state);
     graph.tracks.push(main_track.clone());
-    graph.nodes.push(MusicStateNode {
+    graph.nodes.push(MusicNode {
         id: state.explore_state,
         name: "explore".into(),
         bindings: vec![TrackBinding {
@@ -110,7 +110,7 @@ fn setup_scene(
         externally_targetable: true,
         completion_source: None,
     });
-    graph.nodes.push(MusicStateNode {
+    graph.nodes.push(MusicNode {
         id: state.combat_state,
         name: "combat".into(),
         bindings: vec![TrackBinding {
@@ -128,14 +128,14 @@ fn setup_scene(
         externally_targetable: true,
         completion_source: None,
     });
-    graph.edges.push(TransitionRule {
+    graph.edges.push(MusicEdge {
         from: state.explore_state,
         to: state.combat_state,
         requested_target: None,
         trigger: EdgeTrigger::Immediate,
         destination: EntryPolicy::Resume,
     });
-    graph.edges.push(TransitionRule {
+    graph.edges.push(MusicEdge {
         from: state.combat_state,
         to: state.explore_state,
         requested_target: None,
@@ -389,7 +389,7 @@ fn refresh_hud_text(audio: &SonaraAudio, state: &mut ResumeZoneState, now_second
     );
 }
 
-fn state_label(state_id: MusicStateId, state: &ResumeZoneState) -> &'static str {
+fn state_label(state_id: MusicNodeId, state: &ResumeZoneState) -> &'static str {
     if state_id == state.explore_state {
         "explore"
     } else if state_id == state.combat_state {

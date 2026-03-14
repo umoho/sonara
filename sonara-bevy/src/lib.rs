@@ -5,7 +5,7 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
-    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicStateId, ParameterId,
+    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId, ParameterId,
     ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain,
 };
 use sonara_runtime::{
@@ -407,7 +407,7 @@ impl SonaraAudio {
     pub fn play_music_graph_in_state(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: MusicStateId,
+        initial_state: MusicNodeId,
     ) -> Result<MusicSessionId, AudioBackendError> {
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
@@ -423,7 +423,7 @@ impl SonaraAudio {
     pub fn request_music_state(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicStateId,
+        target_state: MusicNodeId,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
@@ -672,9 +672,9 @@ mod tests {
         system::Single,
     };
     use sonara_model::{
-        Clip, EntryPolicy, EventContentRoot, EventKind, ExitPolicy, MemoryPolicy, MusicGraph,
-        MusicStateId, MusicStateNode, NodeId, NodeRef, PlaybackTarget, SamplerNode, SpatialMode,
-        SwitchCase, SwitchNode, Track, TrackBinding, TrackRole, TransitionRule,
+        Clip, EdgeTrigger, EntryPolicy, EventContentRoot, EventKind, MemoryPolicy, MusicEdge,
+        MusicGraph, MusicNode, MusicNodeId, NodeId, NodeRef, PlaybackTarget, SamplerNode,
+        SpatialMode, SwitchCase, SwitchNode, Track, TrackBinding, TrackRole,
     };
     use uuid::Uuid;
 
@@ -714,20 +714,20 @@ mod tests {
         }
     }
 
-    fn make_music_graph() -> (Clip, Clip, Clip, MusicGraph, MusicStateId, MusicStateId) {
+    fn make_music_graph() -> (Clip, Clip, Clip, MusicGraph, MusicNodeId, MusicNodeId) {
         let preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
         let bridge_clip = Clip::new("preheat_to_boss", Uuid::now_v7());
         let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
-        let preheat_state = MusicStateId::new();
-        let bridge_state = MusicStateId::new();
-        let boss_state = MusicStateId::new();
+        let preheat_state = MusicNodeId::new();
+        let bridge_state = MusicNodeId::new();
+        let boss_state = MusicNodeId::new();
         let main_track = Track::new("music_main", TrackRole::Main);
         let bridge_track = Track::new("music_bridge", TrackRole::Bridge);
         let mut graph = MusicGraph::new("boss_music");
         graph.initial_node = Some(preheat_state);
         graph.tracks.push(main_track.clone());
         graph.tracks.push(bridge_track.clone());
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: preheat_state,
             name: "preheat".into(),
             bindings: vec![TrackBinding {
@@ -742,7 +742,7 @@ mod tests {
             externally_targetable: true,
             completion_source: None,
         });
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: bridge_state,
             name: "bridge".into(),
             bindings: vec![TrackBinding {
@@ -757,7 +757,7 @@ mod tests {
             externally_targetable: false,
             completion_source: Some(bridge_track.id),
         });
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: boss_state,
             name: "boss".into(),
             bindings: vec![TrackBinding {
@@ -772,20 +772,20 @@ mod tests {
             externally_targetable: true,
             completion_source: None,
         });
-        graph.edges.push(TransitionRule {
+        graph.edges.push(MusicEdge {
             from: preheat_state,
             to: bridge_state,
             requested_target: Some(boss_state),
-            trigger: ExitPolicy::NextMatchingCue {
+            trigger: EdgeTrigger::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
             destination: EntryPolicy::ClipStart,
         });
-        graph.edges.push(TransitionRule {
+        graph.edges.push(MusicEdge {
             from: bridge_state,
             to: boss_state,
             requested_target: Some(boss_state),
-            trigger: ExitPolicy::OnComplete,
+            trigger: EdgeTrigger::OnComplete,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),
             },

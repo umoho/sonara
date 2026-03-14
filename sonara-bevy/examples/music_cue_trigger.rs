@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use sonara_bevy::MusicPhase;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;
-use sonara_model::{MusicGraphId, MusicStateId};
+use sonara_model::{MusicGraphId, MusicNodeId};
 use sonara_runtime::{Fade, MusicSessionId};
 
 fn main() {
@@ -33,8 +33,8 @@ struct PromptText;
 struct CueTriggerState {
     session_id: Option<MusicSessionId>,
     graph_id: MusicGraphId,
-    preheat_state: MusicStateId,
-    combat_state: MusicStateId,
+    preheat_state: MusicNodeId,
+    combat_state: MusicNodeId,
     hud_text: String,
     prompt_text: String,
 }
@@ -44,8 +44,8 @@ impl Default for CueTriggerState {
         Self {
             session_id: None,
             graph_id: MusicGraphId::new(),
-            preheat_state: MusicStateId::new(),
-            combat_state: MusicStateId::new(),
+            preheat_state: MusicNodeId::new(),
+            combat_state: MusicNodeId::new(),
             hud_text: String::new(),
             prompt_text: String::new(),
         }
@@ -275,7 +275,7 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     );
 }
 
-fn state_label(state_id: MusicStateId, state: &CueTriggerState) -> &'static str {
+fn state_label(state_id: MusicNodeId, state: &CueTriggerState) -> &'static str {
     if state_id == state.preheat_state {
         "preheat"
     } else if state_id == state.combat_state {

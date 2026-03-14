@@ -20,7 +20,7 @@ use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
-    MusicGraph, MusicGraphId, MusicStateId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
+    MusicGraph, MusicGraphId, MusicNodeId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
     SyncDomain, TrackId,
 };
 use sonara_runtime::{
@@ -399,7 +399,7 @@ impl FirewheelBackend {
     pub fn play_music_graph_in_state(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: MusicStateId,
+        initial_state: MusicNodeId,
     ) -> Result<MusicSessionId, FirewheelBackendError> {
         let session_id = self
             .runtime
@@ -412,7 +412,7 @@ impl FirewheelBackend {
     pub fn request_music_state(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicStateId,
+        target_state: MusicNodeId,
     ) -> Result<(), FirewheelBackendError> {
         self.save_music_session_resume_position(session_id)?;
         self.runtime.request_music_state(session_id, target_state)?;

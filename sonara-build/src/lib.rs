@@ -58,7 +58,7 @@ pub enum BuildError {
     #[error("music graph 必须至少包含一个 node")]
     EmptyMusicGraph,
     #[error("music graph 中存在重复 node ID")]
-    DuplicateMusicStateId,
+    DuplicateMusicNodeId,
     #[error("music graph 中存在重复 track ID")]
     DuplicateTrackId,
     #[error("music graph 引用了不存在的 node")]
@@ -651,7 +651,7 @@ fn validate_music_graph(
 
     for node in &graph.nodes {
         if !node_ids.insert(node.id) {
-            return Err(BuildError::DuplicateMusicStateId);
+            return Err(BuildError::DuplicateMusicNodeId);
         }
 
         if node.bindings.is_empty() {
@@ -785,10 +785,10 @@ pub enum ProjectExportBankError {
 mod tests {
     use camino::Utf8PathBuf;
     use sonara_model::{
-        AuthoringProject, Clip, EntryPolicy, EnumParameter, EventContentRoot, EventId, EventKind,
-        ExitPolicy, MemoryPolicy, MusicGraph, MusicStateId, MusicStateNode, Parameter, ParameterId,
-        ParameterScope, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode, SpatialMode,
-        SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackRole, TransitionRule,
+        AuthoringProject, Clip, EdgeTrigger, EntryPolicy, EnumParameter, EventContentRoot, EventId,
+        EventKind, MemoryPolicy, MusicEdge, MusicGraph, MusicNode, MusicNodeId, Parameter,
+        ParameterId, ParameterScope, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
+        SpatialMode, SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackRole,
     };
 
     use super::*;
@@ -1230,12 +1230,12 @@ mod tests {
         let sync_domain = SyncDomain::new("boss_sync");
         clip.sync_domain = Some(sync_domain.id);
         let resume_slot = ResumeSlot::new("boss_memory");
-        let state_id = MusicStateId::new();
+        let state_id = MusicNodeId::new();
         let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
         graph.tracks.push(main_track.clone());
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: state_id,
             name: "boss".into(),
             bindings: vec![TrackBinding {
@@ -1251,11 +1251,11 @@ mod tests {
             externally_targetable: true,
             completion_source: None,
         });
-        graph.edges.push(TransitionRule {
+        graph.edges.push(MusicEdge {
             from: state_id,
             to: state_id,
             requested_target: None,
-            trigger: ExitPolicy::NextMatchingCue {
+            trigger: EdgeTrigger::NextMatchingCue {
                 tag: "loop_out".into(),
             },
             destination: EntryPolicy::SameSyncPosition,
@@ -1290,13 +1290,13 @@ mod tests {
     #[test]
     fn compile_bank_definition_rejects_music_graph_missing_clip() {
         let resume_slot = ResumeSlot::new("boss_memory");
-        let state_id = MusicStateId::new();
+        let state_id = MusicNodeId::new();
         let missing_clip_id = sonara_model::ClipId::new();
         let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
         graph.tracks.push(main_track.clone());
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: state_id,
             name: "boss".into(),
             bindings: vec![TrackBinding {
@@ -1329,11 +1329,11 @@ mod tests {
     fn compile_bank_definition_rejects_music_graph_binding_missing_track() {
         let asset = make_asset("boss_theme", StreamingMode::Auto);
         let clip = make_clip("boss_loop", asset.id);
-        let state_id = MusicStateId::new();
+        let state_id = MusicNodeId::new();
         let missing_track_id = Track::new("main", TrackRole::Main).id;
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
-        graph.nodes.push(MusicStateNode {
+        graph.nodes.push(MusicNode {
             id: state_id,
             name: "boss".into(),
             bindings: vec![TrackBinding {
