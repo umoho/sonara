@@ -252,8 +252,9 @@ AudioAsset
 建议形状：
 
 ```text
-play_music_graph(graph_id, initial_state) -> MusicSessionId
-request_music_state(session_id, target_state)
+play_music_graph(graph_id) -> MusicSessionId
+play_music_graph_in_node(graph_id, initial_node) -> MusicSessionId
+request_music_node(session_id, target_node)
 stop_music_session(session_id, fade)
 music_status(session_id) -> MusicStatus
 reset_music_memory(memory_slot)
@@ -425,7 +426,7 @@ play(new_event)
     - `MusicStatus`
     - `Stable / WaitingExitCue / WaitingNodeCompletion / Stopped`
     - `play_music_graph(...)`
-    - `request_music_state(...)`
+    - `request_music_node(...)`
     - `complete_music_exit(...)`
     - `complete_music_node_completion(...)`
     - `stop_music_session(...)`
@@ -1269,13 +1270,13 @@ Stopped
 - 不是直接改参数 + stop/play
 - 而是：
   - `play_music_graph(...)`
-  - `request_music_state(...)`
+  - `request_music_node(...)`
 
 当前结果：
 
 - runtime 逻辑骨架已提前落地：
   - `play_music_graph(...)`
-  - `request_music_state(...)`
+  - `request_music_node(...)`
   - `complete_music_exit(...)`
   - `complete_music_node_completion(...)`
   - `music_status(...)`

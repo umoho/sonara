@@ -335,14 +335,14 @@ fn update_music_zone(
         state.combat_left_at = Some(now_seconds);
     }
 
-    let target_state = if inside_zone {
+    let target_node = if inside_zone {
         state.combat_state
     } else {
         state.explore_state
     };
     audio
-        .request_music_state(session_id, target_state)
-        .expect("music state request should succeed");
+        .request_music_node(session_id, target_node)
+        .expect("music node request should succeed");
 
     state.inside_zone = inside_zone;
 }

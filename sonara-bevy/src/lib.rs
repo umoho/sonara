@@ -392,7 +392,7 @@ impl SonaraAudio {
         }
     }
 
-    /// 启动一个音乐图会话，使用图中声明的初始状态。
+    /// 启动一个音乐图会话，使用图中声明的初始节点。
     pub fn play_music_graph(
         &mut self,
         graph_id: MusicGraphId,
@@ -403,34 +403,34 @@ impl SonaraAudio {
         }
     }
 
-    /// 启动一个音乐图会话，并显式指定初始状态。
-    pub fn play_music_graph_in_state(
+    /// 启动一个音乐图会话，并显式指定初始节点。
+    pub fn play_music_graph_in_node(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: MusicNodeId,
+        initial_node: MusicNodeId,
     ) -> Result<MusicSessionId, AudioBackendError> {
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
-                Ok(runtime.play_music_graph_in_state(graph_id, Some(initial_state))?)
+                Ok(runtime.play_music_graph_in_node(graph_id, Some(initial_node))?)
             }
             SonaraBackend::Firewheel(backend) => {
-                Ok(backend.play_music_graph_in_state(graph_id, initial_state)?)
+                Ok(backend.play_music_graph_in_node(graph_id, initial_node)?)
             }
         }
     }
 
-    /// 请求一个音乐会话切换到目标状态。
-    pub fn request_music_state(
+    /// 请求一个音乐会话切换到目标节点。
+    pub fn request_music_node(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicNodeId,
+        target_node: MusicNodeId,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
-                runtime.request_music_state(session_id, target_state)?;
+                runtime.request_music_node(session_id, target_node)?;
             }
             SonaraBackend::Firewheel(backend) => {
-                backend.request_music_state(session_id, target_state)?;
+                backend.request_music_node(session_id, target_node)?;
             }
         }
 
@@ -1128,8 +1128,8 @@ mod tests {
         assert_eq!(status.phase, MusicPhase::Stable);
 
         audio
-            .request_music_state(session_id, boss_state)
-            .expect("music state request should succeed");
+            .request_music_node(session_id, boss_state)
+            .expect("music node request should succeed");
         let status = audio
             .music_status(session_id)
             .expect("music status should resolve");

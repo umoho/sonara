@@ -385,7 +385,7 @@ impl FirewheelBackend {
         self.command_buffer.queue_play_on(emitter_id, event_id);
     }
 
-    /// 启动一个音乐图会话，使用图中声明的初始状态。
+    /// 启动一个音乐图会话，使用图中声明的初始节点。
     pub fn play_music_graph(
         &mut self,
         graph_id: MusicGraphId,
@@ -395,27 +395,27 @@ impl FirewheelBackend {
         Ok(session_id)
     }
 
-    /// 启动一个音乐图会话，并显式指定初始状态。
-    pub fn play_music_graph_in_state(
+    /// 启动一个音乐图会话，并显式指定初始节点。
+    pub fn play_music_graph_in_node(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: MusicNodeId,
+        initial_node: MusicNodeId,
     ) -> Result<MusicSessionId, FirewheelBackendError> {
         let session_id = self
             .runtime
-            .play_music_graph_in_state(graph_id, Some(initial_state))?;
+            .play_music_graph_in_node(graph_id, Some(initial_node))?;
         self.sync_music_session_playback(session_id)?;
         Ok(session_id)
     }
 
-    /// 请求一个音乐会话切换到目标状态。
-    pub fn request_music_state(
+    /// 请求一个音乐会话切换到目标节点。
+    pub fn request_music_node(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicNodeId,
+        target_node: MusicNodeId,
     ) -> Result<(), FirewheelBackendError> {
         self.save_music_session_resume_position(session_id)?;
-        self.runtime.request_music_state(session_id, target_state)?;
+        self.runtime.request_music_node(session_id, target_node)?;
         self.sync_music_session_playback(session_id)?;
         self.play_active_node_stinger(session_id)?;
         Ok(())
@@ -433,7 +433,7 @@ impl FirewheelBackend {
         Ok(())
     }
 
-    /// 通知后端：当前完成节点已经结束，可以进入目标状态。
+    /// 通知后端：当前完成节点已经结束，可以进入目标节点。
     pub fn complete_music_node_completion(
         &mut self,
         session_id: MusicSessionId,

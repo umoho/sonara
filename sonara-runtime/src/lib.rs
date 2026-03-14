@@ -327,23 +327,23 @@ impl QueuedRuntime {
         self.runtime.play_music_graph(graph_id)
     }
 
-    /// 启动一个音乐图会话，并显式指定初始状态。
-    pub fn play_music_graph_in_state(
+    /// 启动一个音乐图会话，并显式指定初始节点。
+    pub fn play_music_graph_in_node(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: Option<MusicNodeId>,
+        initial_node: Option<MusicNodeId>,
     ) -> Result<MusicSessionId, RuntimeError> {
         self.runtime
-            .play_music_graph_in_state(graph_id, initial_state)
+            .play_music_graph_in_node(graph_id, initial_node)
     }
 
-    /// 请求一个音乐会话切换到目标状态。
-    pub fn request_music_state(
+    /// 请求一个音乐会话切换到目标节点。
+    pub fn request_music_node(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicNodeId,
+        target_node: MusicNodeId,
     ) -> Result<(), RuntimeError> {
-        self.runtime.request_music_state(session_id, target_state)
+        self.runtime.request_music_node(session_id, target_node)
     }
 
     /// 通知运行时：会话已到达允许退出的切点。
@@ -598,17 +598,17 @@ pub enum RuntimeError {
     SnapshotTargetBusNotFound(BusId),
     #[error("music graph `{0:?}` is not loaded")]
     MusicGraphNotLoaded(MusicGraphId),
-    #[error("music graph `{0:?}` has no states")]
-    MusicGraphHasNoStates(MusicGraphId),
-    #[error("music graph `{graph_id:?}` has no state `{state_id:?}`")]
-    MusicStateNotFound {
+    #[error("music graph `{0:?}` has no nodes")]
+    MusicGraphHasNoNodes(MusicGraphId),
+    #[error("music graph `{graph_id:?}` has no node `{node_id:?}`")]
+    MusicNodeNotFound {
         graph_id: MusicGraphId,
-        state_id: MusicNodeId,
+        node_id: MusicNodeId,
     },
     #[error("music session `{0:?}` 不存在")]
     MusicSessionNotFound(MusicSessionId),
-    #[error("music graph `{graph_id:?}` has no transition `{from:?} -> {to:?}`")]
-    MusicTransitionNotFound {
+    #[error("music graph `{graph_id:?}` has no edge `{from:?} -> {to:?}`")]
+    MusicEdgeNotFound {
         graph_id: MusicGraphId,
         from: MusicNodeId,
         to: MusicNodeId,
@@ -795,26 +795,26 @@ impl SonaraRuntime {
         self.resume_memories.get(&resume_slot_id)
     }
 
-    /// 启动一个音乐图会话，使用图中声明的初始状态。
+    /// 启动一个音乐图会话，使用图中声明的初始节点。
     pub fn play_music_graph(
         &mut self,
         graph_id: MusicGraphId,
     ) -> Result<MusicSessionId, RuntimeError> {
-        self.play_music_graph_in_state(graph_id, None)
+        self.play_music_graph_in_node(graph_id, None)
     }
 
-    /// 启动一个音乐图会话，并显式指定初始状态。
-    pub fn play_music_graph_in_state(
+    /// 启动一个音乐图会话，并显式指定初始节点。
+    pub fn play_music_graph_in_node(
         &mut self,
         graph_id: MusicGraphId,
-        initial_state: Option<MusicNodeId>,
+        initial_node: Option<MusicNodeId>,
     ) -> Result<MusicSessionId, RuntimeError> {
         let graph = self
             .music_graphs
             .get(&graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
-        let active_node = resolve_music_graph_state(graph, initial_state)?;
-        let state = lookup_music_node(graph, active_node)?;
+        let active_node = resolve_music_graph_node(graph, initial_node)?;
+        let node = lookup_music_node(graph, active_node)?;
         let session_id = MusicSessionId(self.next_music_session_id);
         self.next_music_session_id += 1;
 
@@ -825,7 +825,7 @@ impl SonaraRuntime {
                 graph_id,
                 desired_target_node: active_node,
                 active_node,
-                current_entry: state.default_entry.clone(),
+                current_entry: node.default_entry.clone(),
                 phase: MusicPhase::Stable,
                 pending_transition: None,
             },
@@ -834,11 +834,11 @@ impl SonaraRuntime {
         Ok(session_id)
     }
 
-    /// 请求一个音乐会话切换到目标状态。
-    pub fn request_music_state(
+    /// 请求一个音乐会话切换到目标节点。
+    pub fn request_music_node(
         &mut self,
         session_id: MusicSessionId,
-        target_state: MusicNodeId,
+        target_node_id: MusicNodeId,
     ) -> Result<(), RuntimeError> {
         let (graph_id, active_node, phase) = {
             let session = self
@@ -860,40 +860,40 @@ impl SonaraRuntime {
             .music_graphs
             .get(&graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
-        let target_node = lookup_music_node(graph, target_state)?;
+        let target_node = lookup_music_node(graph, target_node_id)?;
         if !target_node.externally_targetable {
-            return Err(RuntimeError::MusicTransitionNotFound {
+            return Err(RuntimeError::MusicEdgeNotFound {
                 graph_id,
                 from: active_node,
-                to: target_state,
+                to: target_node_id,
             });
         }
 
-        if active_node == target_state {
+        if active_node == target_node_id {
             let session = self
                 .music_sessions
                 .get_mut(&session_id)
                 .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-            session.desired_target_node = target_state;
+            session.desired_target_node = target_node_id;
             session.phase = MusicPhase::Stable;
             session.pending_transition = None;
             return Ok(());
         }
 
-        let transition = lookup_transition_rule(graph, active_node, target_state)?.clone();
+        let transition = lookup_transition_rule(graph, active_node, target_node_id)?.clone();
         let pending_transition =
-            Self::build_pending_transition(active_node, target_state, &transition);
+            Self::build_pending_transition(active_node, target_node_id, &transition);
         let session = self
             .music_sessions
             .get_mut(&session_id)
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-        session.desired_target_node = target_state;
+        session.desired_target_node = target_node_id;
 
         if matches!(transition.trigger, EdgeTrigger::Immediate) {
             self.enter_music_node(
                 session_id,
                 transition.to,
-                target_state,
+                target_node_id,
                 transition.destination,
             )?;
             return Ok(());
@@ -905,11 +905,11 @@ impl SonaraRuntime {
         Ok(())
     }
 
-    /// 预览一次音乐状态切换将使用的最小 transition 语义。
+    /// 预览一次音乐节点切换将使用的最小 transition 语义。
     pub fn preview_music_transition(
         &self,
         session_id: MusicSessionId,
-        target_state: MusicNodeId,
+        target_node_id: MusicNodeId,
     ) -> Result<Option<PendingMusicTransition>, RuntimeError> {
         let session = self
             .music_sessions
@@ -927,16 +927,16 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        lookup_music_node(graph, target_state)?;
+        lookup_music_node(graph, target_node_id)?;
 
-        if session.active_node == target_state {
+        if session.active_node == target_node_id {
             return Ok(None);
         }
 
-        let transition = lookup_transition_rule(graph, session.active_node, target_state)?;
+        let transition = lookup_transition_rule(graph, session.active_node, target_node_id)?;
         Ok(Some(Self::build_pending_transition(
             session.active_node,
-            target_state,
+            target_node_id,
             transition,
         )))
     }
@@ -1097,9 +1097,9 @@ impl SonaraRuntime {
             phase: session.phase,
             current_track_id,
             current_target: state.primary_target(graph).cloned().ok_or(
-                RuntimeError::MusicStateNotFound {
+                RuntimeError::MusicNodeNotFound {
                     graph_id: graph.id,
-                    state_id: session.active_node,
+                    node_id: session.active_node,
                 },
             )?,
             pending_transition: session.pending_transition.clone(),
@@ -1171,9 +1171,9 @@ impl SonaraRuntime {
         let state = lookup_music_node(graph, session.active_node)?;
         let binding = state
             .primary_binding(graph)
-            .ok_or(RuntimeError::MusicStateNotFound {
+            .ok_or(RuntimeError::MusicNodeNotFound {
                 graph_id: graph.id,
-                state_id: session.active_node,
+                node_id: session.active_node,
             })?;
         let clip_id = match &binding.target {
             PlaybackTarget::Clip { clip_id } => clip_id,
@@ -1240,9 +1240,9 @@ impl SonaraRuntime {
         let state = lookup_music_node(graph, session.active_node)?;
         let clip_id = match state
             .primary_target(graph)
-            .ok_or(RuntimeError::MusicStateNotFound {
+            .ok_or(RuntimeError::MusicNodeNotFound {
                 graph_id: graph.id,
-                state_id: session.active_node,
+                node_id: session.active_node,
             })? {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
@@ -1689,13 +1689,13 @@ impl SonaraRuntime {
     }
 }
 
-fn resolve_music_graph_state(
+fn resolve_music_graph_node(
     graph: &MusicGraph,
-    requested_state: Option<MusicNodeId>,
+    requested_node: Option<MusicNodeId>,
 ) -> Result<MusicNodeId, RuntimeError> {
-    if let Some(state_id) = requested_state.or(graph.initial_node) {
-        lookup_music_node(graph, state_id)?;
-        return Ok(state_id);
+    if let Some(node_id) = requested_node.or(graph.initial_node) {
+        lookup_music_node(graph, node_id)?;
+        return Ok(node_id);
     }
 
     graph
@@ -1704,7 +1704,7 @@ fn resolve_music_graph_state(
         .find(|node| node.externally_targetable)
         .or_else(|| graph.nodes.first())
         .map(|node| node.id)
-        .ok_or(RuntimeError::MusicGraphHasNoStates(graph.id))
+        .ok_or(RuntimeError::MusicGraphHasNoNodes(graph.id))
 }
 
 fn lookup_music_node(graph: &MusicGraph, node_id: MusicNodeId) -> Result<&MusicNode, RuntimeError> {
@@ -1712,9 +1712,9 @@ fn lookup_music_node(graph: &MusicGraph, node_id: MusicNodeId) -> Result<&MusicN
         .nodes
         .iter()
         .find(|node| node.id == node_id)
-        .ok_or(RuntimeError::MusicStateNotFound {
+        .ok_or(RuntimeError::MusicNodeNotFound {
             graph_id: graph.id,
-            state_id: node_id,
+            node_id,
         })
 }
 
@@ -1731,7 +1731,7 @@ fn lookup_transition_rule(
                 && !matches!(edge.trigger, EdgeTrigger::OnComplete)
                 && edge.requested_target.unwrap_or(edge.to) == requested_target_node
         })
-        .ok_or(RuntimeError::MusicTransitionNotFound {
+        .ok_or(RuntimeError::MusicEdgeNotFound {
             graph_id: graph.id,
             from,
             to: requested_target_node,
@@ -2207,7 +2207,7 @@ mod tests {
     }
 
     #[test]
-    fn play_music_graph_uses_declared_initial_state() {
+    fn play_music_graph_uses_declared_initial_node() {
         let asset_id = Uuid::now_v7();
         let clip = Clip::new("explore_main", asset_id);
         let explore_state = MusicNodeId::new();
@@ -2274,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn request_music_state_tracks_pending_transition_until_bridge_completes() {
+    fn request_music_node_tracks_pending_transition_until_bridge_completes() {
         let asset_id = Uuid::now_v7();
         let clip = Clip::new("preheat_loop", asset_id);
         let bridge_clip = Clip::new("transition", Uuid::now_v7());
@@ -2374,8 +2374,8 @@ mod tests {
             .play_music_graph(graph.id)
             .expect("music graph should start");
         runtime
-            .request_music_state(session_id, boss_state)
-            .expect("state request should succeed");
+            .request_music_node(session_id, boss_state)
+            .expect("node request should succeed");
 
         let waiting_status = runtime
             .music_status(session_id)
@@ -2623,8 +2623,8 @@ mod tests {
             .play_music_graph(graph.id)
             .expect("music graph should start");
         runtime
-            .request_music_state(session_id, combat_state)
-            .expect("music state request should succeed");
+            .request_music_node(session_id, combat_state)
+            .expect("music node request should succeed");
 
         let resolved = runtime
             .resolve_music_playback(session_id, 20.0)
@@ -2868,8 +2868,8 @@ mod tests {
             .play_music_graph(graph.id)
             .expect("music graph should start");
         runtime
-            .request_music_state(session_id, boss_state)
-            .expect("state request should succeed");
+            .request_music_node(session_id, boss_state)
+            .expect("node request should succeed");
         runtime
             .complete_music_exit(session_id)
             .expect("exit cue completion should succeed");
@@ -2961,8 +2961,8 @@ mod tests {
             .play_music_graph(graph.id)
             .expect("music graph should start");
         runtime
-            .request_music_state(session_id, boss_state)
-            .expect("state request should succeed");
+            .request_music_node(session_id, boss_state)
+            .expect("node request should succeed");
 
         let current_cycle = runtime
             .find_next_music_exit_cue(session_id, 3.0)

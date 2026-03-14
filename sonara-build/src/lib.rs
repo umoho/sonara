@@ -62,7 +62,7 @@ pub enum BuildError {
     #[error("music graph 中存在重复 track ID")]
     DuplicateTrackId,
     #[error("music graph 引用了不存在的 node")]
-    MissingMusicStateDefinition,
+    MissingMusicNodeDefinition,
     #[error("music graph 引用了不存在的 track")]
     MissingTrackDefinition,
     #[error("music graph 引用了不存在的 clip")]
@@ -702,17 +702,17 @@ fn validate_music_graph(
 
     if let Some(initial_node) = graph.initial_node {
         if !node_ids.contains(&initial_node) {
-            return Err(BuildError::MissingMusicStateDefinition);
+            return Err(BuildError::MissingMusicNodeDefinition);
         }
     }
 
     for edge in &graph.edges {
         if !node_ids.contains(&edge.from) || !node_ids.contains(&edge.to) {
-            return Err(BuildError::MissingMusicStateDefinition);
+            return Err(BuildError::MissingMusicNodeDefinition);
         }
         if let Some(requested_target) = edge.requested_target {
             if !node_ids.contains(&requested_target) {
-                return Err(BuildError::MissingMusicStateDefinition);
+                return Err(BuildError::MissingMusicNodeDefinition);
             }
         }
     }

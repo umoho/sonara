@@ -85,7 +85,7 @@ fn setup_scene(
 
     state.session_id = Some(
         audio
-            .play_music_graph_in_state(state.graph_id, state.preheat_state)
+            .play_music_graph_in_node(state.graph_id, state.preheat_state)
             .expect("cue trigger music graph should start"),
     );
     refresh_ui_text(&audio, &mut state);
@@ -180,8 +180,8 @@ fn handle_demo_input(
     }
 
     audio
-        .request_music_state(session_id, state.combat_state)
-        .expect("combat request should succeed");
+        .request_music_node(session_id, state.combat_state)
+        .expect("combat node request should succeed");
 }
 
 fn restart_demo(audio: &mut SonaraAudio, state: &mut CueTriggerState) {
@@ -193,7 +193,7 @@ fn restart_demo(audio: &mut SonaraAudio, state: &mut CueTriggerState) {
 
     state.session_id = Some(
         audio
-            .play_music_graph_in_state(state.graph_id, state.preheat_state)
+            .play_music_graph_in_node(state.graph_id, state.preheat_state)
             .expect("music graph should restart in preheat"),
     );
 }
