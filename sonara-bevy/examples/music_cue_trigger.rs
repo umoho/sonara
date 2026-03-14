@@ -243,6 +243,9 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
                 "warmup is looping via its self-edge"
             }
         }
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.climax_node => {
+            "climax is looping via its self-edge"
+        }
         MusicPhase::WaitingNodeCompletion => "transition node is playing",
         MusicPhase::Stable if status.active_node == state.climax_node => "climax active",
         MusicPhase::Stable => "node is stable",
@@ -270,6 +273,9 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
                 "Press Space to request climax\nWarmup keeps looping by following its self-edge"
                     .into()
             }
+        }
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.climax_node => {
+            "Climax is active\nIt keeps looping by self-edge; press R to restart from intro".into()
         }
         MusicPhase::WaitingNodeCompletion => {
             "Transition is playing...\nA short stinger is triggered on entry, then climax will enter".into()
