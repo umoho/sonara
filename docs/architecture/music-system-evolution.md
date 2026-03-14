@@ -1019,20 +1019,49 @@ struct TrackBinding {
 - `stinger` 是**同一节点上另一条 track 的一段素材**
 - 边只负责“什么时候能走过去”
 
-更清晰的图模型应接近：
+进一步收敛后，更推荐把图统一成：
 
 ```text
-preheat (Stable)
-  -- NextMatchingCue(battle_ready) -->
-bridge (Transition)
-  -- OnComplete -->
-combat (Stable)
+MusicGraph
+├── Nodes
+│   ├── preheat
+│   ├── bridge
+│   └── combat
+└── Edges
+    ├── preheat -> bridge   [NextMatchingCue(battle_ready)]
+    └── bridge  -> combat   [OnComplete]
+```
+
+这里不一定要执着于“稳定/过渡”这种命名本身，关键是节点要能表达两类行为差异：
+
+- 是否可以被外部直接请求
+- 是否会在完成后自动沿边前进
+
+因此更合适的节点级信息是：
+
+- `externally_targetable`
+- `completion_source`
+
+例如：
+
+```text
+preheat
+├── externally_targetable: true
+└── completion_source: none
+
+bridge
+├── externally_targetable: false
+└── completion_source: music_bridge
+
+combat
+├── externally_targetable: true
+└── completion_source: none
 ```
 
 其中 `bridge` 节点本身可以携带多条 track：
 
 ```text
-bridge (Transition)
+bridge
 ├── music_bridge  -> ClipRef(boss_bridge)
 └── music_stinger -> ClipRef(battle_start_stinger)
 ```
@@ -1050,25 +1079,14 @@ bridge (Transition)
   - stinger 是在 `bridge` 开始时播
   - 还是在目标状态接管时播
 
-这版模型更适合整理成：
-
-```text
-MusicGraph
-├── Nodes
-│   ├── preheat   (Stable)
-│   ├── bridge    (Transition)
-│   └── combat    (Stable)
-└── Edges
-    ├── preheat -> bridge   [NextMatchingCue(battle_ready)]
-    └── bridge  -> combat   [OnComplete]
-```
-
 也就是说：
 
 - 节点负责：
   - 自己要播什么内容
   - 这些内容落在哪些 track
   - 是否需要 memory / entry 等局部语义
+  - 节点是否允许被外部直接请求
+  - 节点由哪条 track 驱动完成
 - 边负责：
   - 从一个节点到下一个节点的转移条件
 
@@ -1078,10 +1096,9 @@ MusicGraph
 - 它只是 `bridge` 节点上 `music_stinger` track 的一段素材
 - 进入 `bridge` 节点时，同步启动该节点上的多条 track 即可
 
-这里还需要补一个关键概念：
+这里需要补一个关键概念：
 
-- `primary_track`
-- 或 `completion_source`
+- `completion_source`
 
 原因是 `bridge` 节点中可能同时存在：
 
@@ -1096,29 +1113,46 @@ MusicGraph
 因此更完整的节点语义应接近：
 
 ```text
-TransitionNode
+bridge
 ├── TrackBindings
 │   ├── music_bridge  -> ClipRef(...)
 │   └── music_stinger -> ClipRef(...)
+├── externally_targetable: false
 └── completion_source: music_bridge
 ```
+
+另外，“会一直待着”未必要靠节点类型表达，也可以通过图本身表达：
+
+- 简单循环内容可继续使用 `Clip.loop_range`
+- 如果需要图层语义，也可以使用：
+  - `node -> node [OnComplete]`
+  这样的 self-edge
+
+这意味着长期上不一定非要把节点硬分成：
+
+- `Stable`
+- `Transition`
+
+更通用的做法是：
+
+- 统一成 `MusicNode`
+- 再用节点属性和边触发来表达行为差异
 
 对当前实现的启发是：
 
 - 当前把 `bridge_clip / stinger_clip` 放在 `TransitionRule` 上，是为了 `[2]` 的 MVP 尽快跑通
 - 但长期上，更优雅的终态应是：
-  - `bridge` 升格成过渡节点
+  - `bridge` 升格成节点
   - `stinger` 归入该节点的另一条 track
   - 边只保留转移条件
 
 因此后续如果继续演进，推荐目标不是“继续把边上的字段堆得更复杂”，而是：
 
 1. 引入中性的 `MusicNode`
-2. 区分：
-   - `Stable`
-   - `Transition`
-   - 未来可选 `Transient`
-3. 把 `bridge` 迁移为 `Transition` 节点
+2. 引入：
+   - `externally_targetable`
+   - `completion_source`
+3. 把 `bridge` 迁移为自动转移节点
 4. 把 `stinger` 迁移为该节点上的 `music_stinger` track 内容
 5. 让 `Edge` 只负责：
    - `NextCue`
