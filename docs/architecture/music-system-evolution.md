@@ -441,25 +441,23 @@ play(new_event)
     - `WaitingExitCue` 的第一版自动等待
     - `EntryPolicy::EntryCue` 的入口 cue 解析
     - `[2]` 的按键触发试听 example
-      - 先播 `preheat`
-      - 用户触发后等待下一个合法 cue
-      - 然后进入 `bridge -> combat`
+      - 已切到节点图示例：`intro -> warmup -> transition -> climax`
+      - `intro -> warmup` 通过初始节点自动 `OnComplete` 前进
+      - `warmup` 和 `climax` 通过 `node -> node [OnComplete]` 自循环
+      - 用户在 `warmup` 期间请求 `climax` 时，会先走 `warmup -> transition`，再由 `transition -> climax`
     - `music_cue_trigger` 已迁到独立 compiled bank JSON
     - 示例已开始显式使用 `tracks + bindings`
       - `music_resume` 显式声明 `main` track
-      - `cue_trigger.bank.json` 显式声明 `main / bridge` tracks
+      - `cue_trigger.bank.json` 已切到新的 4 段 wav 音乐图
     - runtime/backend 已开始消费 `Track`
       - `ResolvedMusicPlayback` 会带上当前 `track_id`
-      - `WaitingNodeCompletion` 阶段会解析到 `Bridge` track
       - Firewheel backend 已按 `session + track` 记住当前激活的音乐内容
     - 节点化重构已经开始落代码
-      - `bridge` 已能通过显式 `Transition` 风格节点 + `OnComplete` 边来表达
-      - runtime 的 bridge 生命周期测试已迁到显式节点模型
-      - `stinger` 已开始从“边字段特判”转向“当前活动节点上的 `Stinger` track 绑定”
-      - `resolve_music_stinger_playback(...)` 已按活动节点解析 stinger，而不是按 pending transition 猜测
+      - `bridge/stinger` 旧特判模型已被节点图主线取代
+      - runtime 现在支持请求型 `OnComplete` 边
+      - runtime 的自动节点完成测试已迁到显式节点模型
     - `pending media` 延后启动路径已稳定
   - 仍未完成：
-    - runtime / backend 全面改成 `active_node + edge trigger` 语义
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`
     - `SyncDomain` 驱动的同步变体切换

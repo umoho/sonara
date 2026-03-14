@@ -831,6 +831,13 @@ impl SonaraRuntime {
             },
         );
 
+        self.enter_music_node(
+            session_id,
+            active_node,
+            active_node,
+            node.default_entry.clone(),
+        )?;
+
         Ok(session_id)
     }
 
@@ -881,26 +888,32 @@ impl SonaraRuntime {
         }
 
         let transition = lookup_transition_rule(graph, active_node, target_node_id)?.clone();
-        let pending_transition =
-            Self::build_pending_transition(active_node, target_node_id, &transition);
+        let pending_transition = Self::build_pending_transition(active_node, &transition);
         let session = self
             .music_sessions
             .get_mut(&session_id)
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
         session.desired_target_node = target_node_id;
 
-        if matches!(transition.trigger, EdgeTrigger::Immediate) {
-            self.enter_music_node(
-                session_id,
-                transition.to,
-                target_node_id,
-                transition.destination,
-            )?;
-            return Ok(());
+        match transition.trigger {
+            EdgeTrigger::Immediate => {
+                self.enter_music_node(
+                    session_id,
+                    transition.to,
+                    target_node_id,
+                    transition.destination,
+                )?;
+                return Ok(());
+            }
+            EdgeTrigger::NextMatchingCue { .. } => {
+                session.pending_transition = Some(pending_transition);
+                session.phase = MusicPhase::WaitingExitCue;
+            }
+            EdgeTrigger::OnComplete => {
+                session.pending_transition = Some(pending_transition);
+                session.phase = MusicPhase::WaitingNodeCompletion;
+            }
         }
-
-        session.pending_transition = Some(pending_transition);
-        session.phase = MusicPhase::WaitingExitCue;
 
         Ok(())
     }
@@ -936,20 +949,18 @@ impl SonaraRuntime {
         let transition = lookup_transition_rule(graph, session.active_node, target_node_id)?;
         Ok(Some(Self::build_pending_transition(
             session.active_node,
-            target_node_id,
             transition,
         )))
     }
 
     fn build_pending_transition(
         from_node: MusicNodeId,
-        requested_target_node: MusicNodeId,
         transition: &MusicEdge,
     ) -> PendingMusicTransition {
         PendingMusicTransition {
             from_node,
             to_node: transition.to,
-            requested_target_node,
+            requested_target_node: transition.requested_target.unwrap_or(transition.to),
             trigger: transition.trigger.clone(),
             destination: transition.destination.clone(),
         }
@@ -987,11 +998,7 @@ impl SonaraRuntime {
         session.desired_target_node = requested_target_node;
 
         if let Some(edge) = next_edge {
-            session.pending_transition = Some(Self::build_pending_transition(
-                node_id,
-                requested_target_node,
-                &edge,
-            ));
+            session.pending_transition = Some(Self::build_pending_transition(node_id, &edge));
             session.phase = MusicPhase::WaitingNodeCompletion;
         } else {
             session.phase = MusicPhase::Stable;
@@ -1727,9 +1734,7 @@ fn lookup_transition_rule(
         .edges
         .iter()
         .find(|edge| {
-            edge.from == from
-                && !matches!(edge.trigger, EdgeTrigger::OnComplete)
-                && edge.requested_target.unwrap_or(edge.to) == requested_target_node
+            edge.from == from && edge.requested_target.unwrap_or(edge.to) == requested_target_node
         })
         .ok_or(RuntimeError::MusicEdgeNotFound {
             graph_id: graph.id,
@@ -2410,6 +2415,242 @@ mod tests {
         assert_eq!(stable_status.desired_target_node, boss_state);
         assert_eq!(stable_status.phase, MusicPhase::Stable);
         assert!(stable_status.pending_transition.is_none());
+    }
+
+    #[test]
+    fn initial_node_can_auto_advance_on_complete() {
+        let intro_clip = Clip::new("intro", Uuid::now_v7());
+        let warmup_clip = Clip::new("warmup", Uuid::now_v7());
+        let intro_node = MusicNodeId::new();
+        let warmup_node = MusicNodeId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut graph = MusicGraph::new("interactive_music");
+        graph.initial_node = Some(intro_node);
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicNode {
+            id: intro_node,
+            name: "intro".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: intro_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: false,
+            completion_source: Some(main_track.id),
+        });
+        graph.nodes.push(MusicNode {
+            id: warmup_node,
+            name: "warmup".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: warmup_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(main_track.id),
+        });
+        graph.edges.push(MusicEdge {
+            from: intro_node,
+            to: warmup_node,
+            requested_target: None,
+            trigger: EdgeTrigger::OnComplete,
+            destination: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.extend([intro_clip.id, warmup_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![intro_clip.clone(), warmup_clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+
+        assert_eq!(status.active_node, intro_node);
+        assert_eq!(status.desired_target_node, intro_node);
+        assert_eq!(status.phase, MusicPhase::WaitingNodeCompletion);
+
+        runtime
+            .complete_music_node_completion(session_id)
+            .expect("intro completion should advance to warmup");
+        let warmup_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(warmup_status.active_node, warmup_node);
+        assert_eq!(warmup_status.phase, MusicPhase::Stable);
+    }
+
+    #[test]
+    fn requested_on_complete_edge_retargets_current_looping_node() {
+        let warmup_clip = Clip::new("warmup", Uuid::now_v7());
+        let transition_clip = Clip::new("transition", Uuid::now_v7());
+        let climax_clip = Clip::new("climax", Uuid::now_v7());
+        let warmup_node = MusicNodeId::new();
+        let transition_node = MusicNodeId::new();
+        let climax_node = MusicNodeId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut graph = MusicGraph::new("interactive_music");
+        graph.initial_node = Some(warmup_node);
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicNode {
+            id: warmup_node,
+            name: "warmup".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: warmup_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(main_track.id),
+        });
+        graph.nodes.push(MusicNode {
+            id: transition_node,
+            name: "transition".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: transition_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: false,
+            completion_source: Some(main_track.id),
+        });
+        graph.nodes.push(MusicNode {
+            id: climax_node,
+            name: "climax".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: climax_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(main_track.id),
+        });
+        graph.edges.push(MusicEdge {
+            from: warmup_node,
+            to: warmup_node,
+            requested_target: None,
+            trigger: EdgeTrigger::OnComplete,
+            destination: EntryPolicy::ClipStart,
+        });
+        graph.edges.push(MusicEdge {
+            from: warmup_node,
+            to: transition_node,
+            requested_target: Some(climax_node),
+            trigger: EdgeTrigger::OnComplete,
+            destination: EntryPolicy::ClipStart,
+        });
+        graph.edges.push(MusicEdge {
+            from: transition_node,
+            to: climax_node,
+            requested_target: Some(climax_node),
+            trigger: EdgeTrigger::OnComplete,
+            destination: EntryPolicy::ClipStart,
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects
+            .clips
+            .extend([warmup_clip.id, transition_clip.id, climax_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    warmup_clip.clone(),
+                    transition_clip.clone(),
+                    climax_clip.clone(),
+                ],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with music graph");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let initial_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(initial_status.active_node, warmup_node);
+        assert_eq!(initial_status.phase, MusicPhase::WaitingNodeCompletion);
+
+        runtime
+            .request_music_node(session_id, climax_node)
+            .expect("climax request should replace warmup self-loop");
+        let waiting_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(waiting_status.active_node, warmup_node);
+        assert_eq!(waiting_status.desired_target_node, climax_node);
+        assert_eq!(waiting_status.phase, MusicPhase::WaitingNodeCompletion);
+        assert_eq!(
+            waiting_status
+                .pending_transition
+                .as_ref()
+                .expect("pending transition should exist")
+                .to_node,
+            transition_node
+        );
+
+        runtime
+            .complete_music_node_completion(session_id)
+            .expect("warmup completion should enter transition");
+        let transition_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(transition_status.active_node, transition_node);
+        assert_eq!(transition_status.phase, MusicPhase::WaitingNodeCompletion);
+
+        runtime
+            .complete_music_node_completion(session_id)
+            .expect("transition completion should enter climax");
+        let climax_status = runtime
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(climax_status.active_node, climax_node);
+        assert_eq!(climax_status.phase, MusicPhase::Stable);
     }
 
     #[test]

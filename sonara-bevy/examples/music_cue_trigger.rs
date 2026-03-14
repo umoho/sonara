@@ -33,8 +33,9 @@ struct PromptText;
 struct CueTriggerState {
     session_id: Option<MusicSessionId>,
     graph_id: MusicGraphId,
-    preheat_state: MusicNodeId,
-    combat_state: MusicNodeId,
+    intro_node: MusicNodeId,
+    warmup_node: MusicNodeId,
+    climax_node: MusicNodeId,
     hud_text: String,
     prompt_text: String,
 }
@@ -44,8 +45,9 @@ impl Default for CueTriggerState {
         Self {
             session_id: None,
             graph_id: MusicGraphId::new(),
-            preheat_state: MusicNodeId::new(),
-            combat_state: MusicNodeId::new(),
+            intro_node: MusicNodeId::new(),
+            warmup_node: MusicNodeId::new(),
+            climax_node: MusicNodeId::new(),
             hud_text: String::new(),
             prompt_text: String::new(),
         }
@@ -66,18 +68,24 @@ fn setup_scene(
         .cloned()
         .expect("cue trigger bank should contain a music graph");
     state.graph_id = graph.id;
-    state.preheat_state = graph
+    state.intro_node = graph
         .nodes
         .iter()
-        .find(|music_state| music_state.name == "preheat")
-        .map(|music_state| music_state.id)
-        .expect("cue trigger graph should contain preheat state");
-    state.combat_state = graph
+        .find(|music_node| music_node.name == "intro")
+        .map(|music_node| music_node.id)
+        .expect("cue trigger graph should contain intro node");
+    state.warmup_node = graph
         .nodes
         .iter()
-        .find(|music_state| music_state.name == "combat")
-        .map(|music_state| music_state.id)
-        .expect("cue trigger graph should contain combat state");
+        .find(|music_node| music_node.name == "warmup")
+        .map(|music_node| music_node.id)
+        .expect("cue trigger graph should contain warmup node");
+    state.climax_node = graph
+        .nodes
+        .iter()
+        .find(|music_node| music_node.name == "climax")
+        .map(|music_node| music_node.id)
+        .expect("cue trigger graph should contain climax node");
 
     audio
         .load_compiled_bank(package)
@@ -85,7 +93,7 @@ fn setup_scene(
 
     state.session_id = Some(
         audio
-            .play_music_graph_in_node(state.graph_id, state.preheat_state)
+            .play_music_graph_in_node(state.graph_id, state.intro_node)
             .expect("cue trigger music graph should start"),
     );
     refresh_ui_text(&audio, &mut state);
@@ -128,7 +136,7 @@ fn setup_scene(
             parent
                 .spawn((
                     Node {
-                        max_width: px(520.0),
+                        max_width: px(560.0),
                         padding: UiRect::axes(px(22.0), px(18.0)),
                         border_radius: BorderRadius::all(px(14.0)),
                         ..default()
@@ -170,18 +178,13 @@ fn handle_demo_input(
         return;
     };
 
-    if status.phase != MusicPhase::Stable {
-        return;
-    }
-    if status.active_node != state.preheat_state
-        || status.desired_target_node != state.preheat_state
-    {
+    if status.active_node != state.warmup_node || status.desired_target_node != state.warmup_node {
         return;
     }
 
     audio
-        .request_music_node(session_id, state.combat_state)
-        .expect("combat node request should succeed");
+        .request_music_node(session_id, state.climax_node)
+        .expect("climax node request should succeed");
 }
 
 fn restart_demo(audio: &mut SonaraAudio, state: &mut CueTriggerState) {
@@ -193,8 +196,8 @@ fn restart_demo(audio: &mut SonaraAudio, state: &mut CueTriggerState) {
 
     state.session_id = Some(
         audio
-            .play_music_graph_in_node(state.graph_id, state.preheat_state)
-            .expect("music graph should restart in preheat"),
+            .play_music_graph_in_node(state.graph_id, state.intro_node)
+            .expect("music graph should restart in intro"),
     );
 }
 
@@ -229,41 +232,58 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     let playhead_seconds = audio.music_session_playhead_seconds(session_id);
 
     let phase_hint = match status.phase {
-        MusicPhase::WaitingExitCue => "waiting for next battle_ready cue",
-        MusicPhase::WaitingNodeCompletion => "bridge is playing",
-        MusicPhase::Stable if status.active_node == state.combat_state => "combat active",
-        MusicPhase::Stable => "preheat active",
-        _ => "transitioning",
+        MusicPhase::WaitingExitCue => "waiting for a configured exit cue",
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.intro_node => {
+            "intro is auto-advancing into warmup"
+        }
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.warmup_node => {
+            if status.desired_target_node == state.climax_node {
+                "warmup will finish this pass, then enter transition"
+            } else {
+                "warmup is looping via its self-edge"
+            }
+        }
+        MusicPhase::WaitingNodeCompletion => "transition node is playing",
+        MusicPhase::Stable if status.active_node == state.climax_node => "climax active",
+        MusicPhase::Stable => "node is stable",
+        MusicPhase::Stopped => "session stopped",
+        MusicPhase::EnteringDestination => "entering destination",
     };
 
     state.prompt_text = match status.phase {
-        MusicPhase::Stable if status.active_node == state.preheat_state => {
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.intro_node => {
             if pending_media {
-                "Loading music resources...\nYou can press Space early; Sonara will wait for the cue once playback starts".into()
+                "Loading intro...\nThe graph will naturally move into warmup once playback starts"
+                    .into()
             } else {
-                "Press Space to trigger combat\nSonara will wait for the next battle_ready cue"
+                "Intro is playing\nIt will naturally move into warmup when this node completes"
                     .into()
             }
         }
-        MusicPhase::WaitingExitCue => {
+        MusicPhase::WaitingNodeCompletion if status.active_node == state.warmup_node => {
             if pending_media {
-                "Combat requested\nWaiting for music media to become ready...".into()
+                "Warmup is loading...\nOnce ready it will keep looping until you request climax"
+                    .into()
+            } else if status.desired_target_node == state.climax_node {
+                "Climax requested\nWarmup will finish this pass, then enter transition".into()
             } else {
-                "Combat requested\nWaiting for the next battle_ready cue...".into()
+                "Press Space to request climax\nWarmup keeps looping by following its self-edge"
+                    .into()
             }
         }
         MusicPhase::WaitingNodeCompletion => {
-            "Bridge playing...\nBoss music will enter after this clip".into()
+            "Transition is playing...\nA short stinger is triggered on entry, then climax will enter".into()
         }
-        MusicPhase::Stable if status.active_node == state.combat_state => {
-            "Combat is active\nPress R to reset back to preheat".into()
+        MusicPhase::Stable if status.active_node == state.climax_node => {
+            "Climax is active\nIt loops by self-edge; press R to restart from intro".into()
         }
+        MusicPhase::Stable => "Current node is stable\nPress R to restart from intro".into(),
         MusicPhase::Stopped => "Session stopped\nPress R to restart the demo".into(),
         _ => "Transition in progress".into(),
     };
 
     state.hud_text = format!(
-        "Sonara music_cue_trigger\n\nGoal: hear [2] waiting for the next cue before switching\nPress R to reset the session back to preheat\nThis demo intentionally locks the transition once started\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nloading_media: {}\nplayhead_seconds: {}",
+        "Sonara music_cue_trigger\n\nGraph: intro -> warmup -> transition -> climax\nSelf-edges: warmup -> warmup, climax -> climax\nPress Space during warmup to request climax\nThe transition node also triggers a stinger on entry\nPress R to restart from intro\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nloading_media: {}\nplayhead_seconds: {}",
         state_label(status.active_node, state),
         state_label(status.desired_target_node, state),
         status.phase,
@@ -275,12 +295,14 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     );
 }
 
-fn state_label(state_id: MusicNodeId, state: &CueTriggerState) -> &'static str {
-    if state_id == state.preheat_state {
-        "preheat"
-    } else if state_id == state.combat_state {
-        "combat"
+fn state_label(node_id: MusicNodeId, state: &CueTriggerState) -> &'static str {
+    if node_id == state.intro_node {
+        "intro"
+    } else if node_id == state.warmup_node {
+        "warmup"
+    } else if node_id == state.climax_node {
+        "climax"
     } else {
-        "unknown"
+        "transition"
     }
 }
