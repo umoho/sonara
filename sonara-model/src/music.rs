@@ -12,17 +12,11 @@ fn default_true() -> bool {
 pub struct MusicGraph {
     pub id: MusicGraphId,
     pub name: SmolStr,
-    #[serde(default)]
-    pub initial_state: Option<MusicNodeId>,
     pub initial_node: Option<MusicNodeId>,
     #[serde(default)]
     pub tracks: Vec<Track>,
     #[serde(default)]
-    pub states: Vec<MusicNode>,
-    #[serde(default)]
     pub nodes: Vec<MusicNode>,
-    #[serde(default)]
-    pub transitions: Vec<MusicEdge>,
     #[serde(default)]
     pub edges: Vec<MusicEdge>,
 }
@@ -33,12 +27,9 @@ impl MusicGraph {
         Self {
             id: MusicGraphId::new(),
             name: name.into(),
-            initial_state: None,
             initial_node: None,
             tracks: Vec::new(),
-            states: Vec::new(),
             nodes: Vec::new(),
-            transitions: Vec::new(),
             edges: Vec::new(),
         }
     }
@@ -62,30 +53,7 @@ impl MusicGraph {
 
     /// 查找一个节点定义。
     pub fn node(&self, node_id: MusicNodeId) -> Option<&MusicNode> {
-        self.all_nodes().iter().find(|node| node.id == node_id)
-    }
-
-    /// 读取图中的节点集合，优先使用新字段。
-    pub fn all_nodes(&self) -> &[MusicNode] {
-        if self.nodes.is_empty() {
-            &self.states
-        } else {
-            &self.nodes
-        }
-    }
-
-    /// 读取图中的边集合，优先使用新字段。
-    pub fn all_edges(&self) -> &[MusicEdge] {
-        if self.edges.is_empty() {
-            &self.transitions
-        } else {
-            &self.edges
-        }
-    }
-
-    /// 读取图中的初始节点，优先使用新字段。
-    pub fn start_node(&self) -> Option<MusicNodeId> {
-        self.initial_node.or(self.initial_state)
+        self.nodes.iter().find(|node| node.id == node_id)
     }
 }
 
@@ -94,7 +62,6 @@ impl MusicGraph {
 pub struct MusicNode {
     pub id: MusicNodeId,
     pub name: SmolStr,
-    pub target: PlaybackTarget,
     #[serde(default)]
     pub bindings: Vec<TrackBinding>,
     pub memory_slot: Option<ResumeSlotId>,
@@ -141,9 +108,7 @@ impl MusicNode {
 
     /// 读取当前节点的主导播放目标。
     pub fn primary_target<'a>(&'a self, graph: &'a MusicGraph) -> Option<&'a PlaybackTarget> {
-        self.primary_binding(graph)
-            .map(|binding| &binding.target)
-            .or(Some(&self.target))
+        self.primary_binding(graph).map(|binding| &binding.target)
     }
 }
 
@@ -247,24 +212,11 @@ pub struct MusicEdge {
     pub from: MusicNodeId,
     pub to: MusicNodeId,
     #[serde(default)]
-    pub exit: Option<EdgeTrigger>,
-    #[serde(default)]
-    pub bridge_clip: Option<ClipId>,
-    #[serde(default)]
-    pub stinger_clip: Option<ClipId>,
-    #[serde(default)]
     pub requested_target: Option<MusicNodeId>,
     #[serde(default)]
     pub trigger: EdgeTrigger,
     #[serde(default)]
     pub destination: EntryPolicy,
-}
-
-impl MusicEdge {
-    /// 读取当前边真正使用的触发方式。
-    pub fn effective_trigger(&self) -> &EdgeTrigger {
-        self.exit.as_ref().unwrap_or(&self.trigger)
-    }
 }
 
 pub type MusicStateNode = MusicNode;

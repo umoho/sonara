@@ -635,7 +635,7 @@ fn validate_music_graph(
     resume_slot_by_id: &HashMap<ResumeSlotId, &ResumeSlot>,
     sync_domain_by_id: &HashMap<SyncDomainId, &SyncDomain>,
 ) -> Result<MusicGraphDependencies, BuildError> {
-    if graph.all_nodes().is_empty() {
+    if graph.nodes.is_empty() {
         return Err(BuildError::EmptyMusicGraph);
     }
 
@@ -649,7 +649,7 @@ fn validate_music_graph(
         }
     }
 
-    for node in graph.all_nodes() {
+    for node in &graph.nodes {
         if !node_ids.insert(node.id) {
             return Err(BuildError::DuplicateMusicStateId);
         }
@@ -700,13 +700,13 @@ fn validate_music_graph(
         }
     }
 
-    if let Some(initial_node) = graph.start_node() {
+    if let Some(initial_node) = graph.initial_node {
         if !node_ids.contains(&initial_node) {
             return Err(BuildError::MissingMusicStateDefinition);
         }
     }
 
-    for edge in graph.all_edges() {
+    for edge in &graph.edges {
         if !node_ids.contains(&edge.from) || !node_ids.contains(&edge.to) {
             return Err(BuildError::MissingMusicStateDefinition);
         }
@@ -1235,10 +1235,9 @@ mod tests {
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
         graph.tracks.push(main_track.clone());
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip { clip_id: clip.id },
@@ -1252,16 +1251,13 @@ mod tests {
             externally_targetable: true,
             completion_source: None,
         });
-        graph.transitions.push(TransitionRule {
+        graph.edges.push(TransitionRule {
             from: state_id,
             to: state_id,
             requested_target: None,
             trigger: ExitPolicy::NextMatchingCue {
                 tag: "loop_out".into(),
             },
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::SameSyncPosition,
         });
 
@@ -1300,12 +1296,9 @@ mod tests {
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
         graph.tracks.push(main_track.clone());
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: missing_clip_id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -1340,10 +1333,9 @@ mod tests {
         let missing_track_id = Track::new("main", TrackRole::Main).id;
         let mut graph = MusicGraph::new("boss_flow");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
             bindings: vec![TrackBinding {
                 track_id: missing_track_id,
                 target: PlaybackTarget::Clip { clip_id: clip.id },

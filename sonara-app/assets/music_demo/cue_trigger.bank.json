@@ -308,9 +308,8 @@
         {
           "from": "019ce700-0000-7000-8000-000000000502",
           "to": "019ce700-0000-7000-8000-000000000501",
-          "exit": "Immediate",
-          "bridge_clip": null,
-          "stinger_clip": null,
+          "requested_target": "019ce700-0000-7000-8000-000000000501",
+          "trigger": "Immediate",
           "destination": "ClipStart"
         }
       ]

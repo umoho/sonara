@@ -398,12 +398,10 @@ play(new_event)
     - `MusicGraph`
     - `Track`
     - `TrackBinding`
-  - `MusicGraph` 已开始从旧的
-    - `MusicStateNode + TransitionRule`
-    向新的
+  - `MusicGraph` 已切到新的
     - `MusicNode + MusicEdge`
-    收敛
-  - 当前代码仍保留少量兼容字段，便于现有 bank / example 平滑迁移
+    数据结构
+  - 现有 example / bank 已跟进到 `nodes + edges + bindings`
 - `阶段 2` 进行中
   - 已完成：
     - 打开 Firewheel 的 `scheduled_events` / `musical_transport`
@@ -460,7 +458,6 @@ play(new_event)
       - `resolve_music_stinger_playback(...)` 已按活动节点解析 stinger，而不是按 pending transition 猜测
     - `pending media` 延后启动路径已稳定
   - 仍未完成：
-    - 彻底删除旧的 `bridge_clip / stinger_clip` 兼容字段
     - runtime / backend 全面改成 `active_node + edge trigger` 语义
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`

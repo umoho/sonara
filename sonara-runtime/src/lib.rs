@@ -889,7 +889,7 @@ impl SonaraRuntime {
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
         session.desired_state = target_state;
 
-        if matches!(transition.effective_trigger(), EdgeTrigger::Immediate) {
+        if matches!(transition.trigger, EdgeTrigger::Immediate) {
             self.enter_music_node(
                 session_id,
                 transition.to,
@@ -950,7 +950,7 @@ impl SonaraRuntime {
             from_state,
             to_state: transition.to,
             requested_target,
-            trigger: transition.effective_trigger().clone(),
+            trigger: transition.trigger.clone(),
             destination: transition.destination.clone(),
         }
     }
@@ -1169,15 +1169,13 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_state(graph, session.active_state)?;
-        let binding = state.primary_binding(graph);
-        let target = binding
-            .map(|binding| &binding.target)
-            .or_else(|| state.primary_target(graph))
+        let binding = state
+            .primary_binding(graph)
             .ok_or(RuntimeError::MusicStateNotFound {
                 graph_id: graph.id,
                 state_id: session.active_state,
             })?;
-        let clip_id = match target {
+        let clip_id = match &binding.target {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
         let entry_offset_seconds =
@@ -1185,7 +1183,7 @@ impl SonaraRuntime {
 
         Ok(ResolvedMusicPlayback {
             clip_id: *clip_id,
-            track_id: binding.map(|binding| binding.track_id),
+            track_id: Some(binding.track_id),
             entry_offset_seconds,
         })
     }
@@ -1699,16 +1697,16 @@ fn resolve_music_graph_state(
     graph: &MusicGraph,
     requested_state: Option<MusicStateId>,
 ) -> Result<MusicStateId, RuntimeError> {
-    if let Some(state_id) = requested_state.or(graph.start_node()) {
+    if let Some(state_id) = requested_state.or(graph.initial_node) {
         lookup_music_state(graph, state_id)?;
         return Ok(state_id);
     }
 
     graph
-        .all_nodes()
+        .nodes
         .iter()
         .find(|node| node.externally_targetable)
-        .or_else(|| graph.all_nodes().first())
+        .or_else(|| graph.nodes.first())
         .map(|node| node.id)
         .ok_or(RuntimeError::MusicGraphHasNoStates(graph.id))
 }
@@ -1718,7 +1716,7 @@ fn lookup_music_state(
     state_id: MusicStateId,
 ) -> Result<&MusicStateNode, RuntimeError> {
     graph
-        .all_nodes()
+        .nodes
         .iter()
         .find(|node| node.id == state_id)
         .ok_or(RuntimeError::MusicStateNotFound {
@@ -1733,11 +1731,11 @@ fn lookup_transition_rule(
     requested_target: MusicStateId,
 ) -> Result<&TransitionRule, RuntimeError> {
     graph
-        .all_edges()
+        .edges
         .iter()
         .find(|edge| {
             edge.from == from
-                && !matches!(edge.effective_trigger(), EdgeTrigger::OnComplete)
+                && !matches!(edge.trigger, EdgeTrigger::OnComplete)
                 && edge.requested_target.unwrap_or(edge.to) == requested_target
         })
         .ok_or(RuntimeError::MusicTransitionNotFound {
@@ -1752,9 +1750,9 @@ fn lookup_auto_transition_rule(
     from: MusicStateId,
     requested_target: MusicStateId,
 ) -> Option<&TransitionRule> {
-    graph.all_edges().iter().find(|edge| {
+    graph.edges.iter().find(|edge| {
         edge.from == from
-            && matches!(edge.effective_trigger(), EdgeTrigger::OnComplete)
+            && matches!(edge.trigger, EdgeTrigger::OnComplete)
             && edge
                 .requested_target
                 .map(|target| target == requested_target)
@@ -2117,13 +2115,17 @@ mod tests {
         let resume_slot = ResumeSlot::new("explore_memory");
         let sync_domain = SyncDomain::new("day_night");
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("world_music");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "explore".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2163,13 +2165,17 @@ mod tests {
         let clip = Clip::new("combat_main", asset_id);
         let resume_slot = ResumeSlot::new("combat_memory");
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("combat_music");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "combat".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2213,24 +2219,30 @@ mod tests {
         let clip = Clip::new("explore_main", asset_id);
         let explore_state = MusicStateId::new();
         let combat_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("world_music");
         graph.initial_node = Some(combat_state);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: explore_state,
             name: "explore".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
             externally_targetable: true,
             completion_source: None,
         });
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: combat_state,
             name: "combat".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
@@ -2286,7 +2298,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip { clip_id: clip.id },
@@ -2300,9 +2311,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: bridge_state,
             name: "bridge".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: bridge_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: bridge_track.id,
                 target: PlaybackTarget::Clip {
@@ -2318,9 +2326,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: boss_state,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: boss_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -2340,9 +2345,6 @@ mod tests {
             trigger: ExitPolicy::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
         graph.edges.push(TransitionRule {
@@ -2350,9 +2352,6 @@ mod tests {
             to: boss_state,
             requested_target: Some(boss_state),
             trigger: ExitPolicy::OnComplete,
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),
             },
@@ -2425,13 +2424,17 @@ mod tests {
         let clip = Clip::new("explore_main", Uuid::now_v7());
         let resume_slot = ResumeSlot::new("explore_memory");
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("world_music");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "explore".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2490,13 +2493,17 @@ mod tests {
         let clip = Clip::new("explore_main", Uuid::now_v7());
         let resume_slot = ResumeSlot::new("explore_memory");
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("world_music");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "explore".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: Some(resume_slot.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(5.0),
@@ -2547,28 +2554,34 @@ mod tests {
         let combat_memory = ResumeSlot::new("combat_memory");
         let explore_state = MusicStateId::new();
         let combat_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("world_music");
         graph.initial_node = Some(explore_state);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: explore_state,
             name: "explore".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: explore_clip.id,
-            },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: explore_clip.id,
+                },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
             externally_targetable: true,
             completion_source: None,
         });
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: combat_state,
             name: "combat".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: combat_clip.id,
-            },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: combat_clip.id,
+                },
+            }],
             memory_slot: Some(combat_memory.id),
             memory_policy: MemoryPolicy {
                 ttl_seconds: Some(30.0),
@@ -2578,14 +2591,11 @@ mod tests {
             externally_targetable: true,
             completion_source: None,
         });
-        graph.transitions.push(TransitionRule {
+        graph.edges.push(TransitionRule {
             from: explore_state,
             to: combat_state,
             requested_target: None,
             trigger: ExitPolicy::Immediate,
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::Resume,
         });
 
@@ -2641,13 +2651,17 @@ mod tests {
         clip.cues = vec![second, first];
 
         let state_id = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_music");
         graph.initial_node = Some(state_id);
-        graph.states.push(MusicStateNode {
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
-            target: PlaybackTarget::Clip { clip_id: clip.id },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::EntryCue {
@@ -2687,20 +2701,16 @@ mod tests {
     }
 
     #[test]
-    fn explicit_main_track_binding_overrides_legacy_music_target() {
-        let legacy_clip = Clip::new("legacy_main", Uuid::now_v7());
+    fn explicit_main_track_binding_drives_playback_target() {
         let main_clip = Clip::new("explicit_main", Uuid::now_v7());
         let state_id = MusicStateId::new();
         let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_music");
         graph.initial_node = Some(state_id);
         graph.tracks.push(main_track.clone());
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: state_id,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: legacy_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -2715,7 +2725,7 @@ mod tests {
         });
 
         let mut bank = Bank::new("core");
-        bank.objects.clips.extend([legacy_clip.id, main_clip.id]);
+        bank.objects.clips.push(main_clip.id);
         bank.objects.music_graphs.push(graph.id);
 
         let mut runtime = SonaraRuntime::new();
@@ -2725,7 +2735,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                vec![legacy_clip, main_clip.clone()],
+                vec![main_clip.clone()],
                 Vec::new(),
                 Vec::new(),
                 vec![graph.clone()],
@@ -2771,9 +2781,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: preheat_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -2789,9 +2796,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: bridge_state,
             name: "bridge".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: bridge_clip.id,
-            },
             bindings: vec![
                 TrackBinding {
                     track_id: bridge_track.id,
@@ -2815,9 +2819,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: boss_state,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: boss_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -2837,9 +2838,6 @@ mod tests {
             trigger: ExitPolicy::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
         graph.edges.push(TransitionRule {
@@ -2847,9 +2845,6 @@ mod tests {
             to: boss_state,
             requested_target: Some(boss_state),
             trigger: ExitPolicy::OnComplete,
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
 
@@ -2907,44 +2902,47 @@ mod tests {
         let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
         let preheat_state = MusicStateId::new();
         let boss_state = MusicStateId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
         let mut graph = MusicGraph::new("boss_music");
-        graph.initial_state = Some(preheat_state);
-        graph.states.push(MusicStateNode {
+        graph.initial_node = Some(preheat_state);
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: preheat_clip.id,
-            },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: preheat_clip.id,
+                },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
             externally_targetable: true,
             completion_source: None,
         });
-        graph.states.push(MusicStateNode {
+        graph.nodes.push(MusicStateNode {
             id: boss_state,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: boss_clip.id,
-            },
-            bindings: Vec::new(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: boss_clip.id,
+                },
+            }],
             memory_slot: None,
             memory_policy: MemoryPolicy::default(),
             default_entry: EntryPolicy::ClipStart,
             externally_targetable: true,
             completion_source: None,
         });
-        graph.transitions.push(TransitionRule {
+        graph.edges.push(TransitionRule {
             from: preheat_state,
             to: boss_state,
             requested_target: None,
             trigger: ExitPolicy::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
 

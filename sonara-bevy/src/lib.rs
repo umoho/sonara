@@ -726,9 +726,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: preheat_state,
             name: "preheat".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: preheat_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -744,9 +741,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: bridge_state,
             name: "bridge".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: bridge_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: bridge_track.id,
                 target: PlaybackTarget::Clip {
@@ -762,9 +756,6 @@ mod tests {
         graph.nodes.push(MusicStateNode {
             id: boss_state,
             name: "boss".into(),
-            target: PlaybackTarget::Clip {
-                clip_id: boss_clip.id,
-            },
             bindings: vec![TrackBinding {
                 track_id: main_track.id,
                 target: PlaybackTarget::Clip {
@@ -784,9 +775,6 @@ mod tests {
             trigger: ExitPolicy::NextMatchingCue {
                 tag: "battle_ready".into(),
             },
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::ClipStart,
         });
         graph.edges.push(TransitionRule {
@@ -794,9 +782,6 @@ mod tests {
             to: boss_state,
             requested_target: Some(boss_state),
             trigger: ExitPolicy::OnComplete,
-            exit: None,
-            bridge_clip: None,
-            stinger_clip: None,
             destination: EntryPolicy::EntryCue {
                 tag: "boss_in".into(),
             },

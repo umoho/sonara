@@ -95,9 +95,6 @@ fn setup_scene(
     graph.nodes.push(MusicStateNode {
         id: state.explore_state,
         name: "explore".into(),
-        target: PlaybackTarget::Clip {
-            clip_id: explore_clip.id,
-        },
         bindings: vec![TrackBinding {
             track_id: main_track.id,
             target: PlaybackTarget::Clip {
@@ -116,9 +113,6 @@ fn setup_scene(
     graph.nodes.push(MusicStateNode {
         id: state.combat_state,
         name: "combat".into(),
-        target: PlaybackTarget::Clip {
-            clip_id: combat_clip.id,
-        },
         bindings: vec![TrackBinding {
             track_id: main_track.id,
             target: PlaybackTarget::Clip {
@@ -139,9 +133,6 @@ fn setup_scene(
         to: state.combat_state,
         requested_target: None,
         trigger: EdgeTrigger::Immediate,
-        exit: None,
-        bridge_clip: None,
-        stinger_clip: None,
         destination: EntryPolicy::Resume,
     });
     graph.edges.push(TransitionRule {
@@ -149,9 +140,6 @@ fn setup_scene(
         to: state.explore_state,
         requested_target: None,
         trigger: EdgeTrigger::Immediate,
-        exit: None,
-        bridge_clip: None,
-        stinger_clip: None,
         destination: EntryPolicy::Resume,
     });
 
