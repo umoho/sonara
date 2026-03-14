@@ -450,14 +450,18 @@ impl SonaraAudio {
         Ok(())
     }
 
-    /// 通知音乐会话：桥接片段已经播放完成。
-    pub fn complete_music_bridge(
+    /// 通知音乐会话：当前自动推进节点已经播放完成。
+    pub fn complete_music_node_completion(
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), AudioBackendError> {
         match &mut self.backend {
-            SonaraBackend::Runtime(runtime) => runtime.complete_music_bridge(session_id)?,
-            SonaraBackend::Firewheel(backend) => backend.complete_music_bridge(session_id)?,
+            SonaraBackend::Runtime(runtime) => {
+                runtime.complete_music_node_completion(session_id)?
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.complete_music_node_completion(session_id)?
+            }
         }
 
         Ok(())
@@ -1120,7 +1124,7 @@ mod tests {
         let status = audio
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(status.active_state, preheat_state);
+        assert_eq!(status.active_node, preheat_state);
         assert_eq!(status.phase, MusicPhase::Stable);
 
         audio
@@ -1129,7 +1133,7 @@ mod tests {
         let status = audio
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(status.desired_state, boss_state);
+        assert_eq!(status.desired_target_node, boss_state);
         assert_eq!(status.phase, MusicPhase::WaitingExitCue);
 
         audio
@@ -1138,15 +1142,15 @@ mod tests {
         let status = audio
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(status.phase, MusicPhase::PlayingBridge);
+        assert_eq!(status.phase, MusicPhase::WaitingNodeCompletion);
 
         audio
-            .complete_music_bridge(session_id)
+            .complete_music_node_completion(session_id)
             .expect("bridge completion should succeed");
         let status = audio
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(status.active_state, boss_state);
+        assert_eq!(status.active_node, boss_state);
         assert_eq!(status.phase, MusicPhase::Stable);
     }
 

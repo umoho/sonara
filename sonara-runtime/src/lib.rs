@@ -87,7 +87,7 @@ pub struct ActiveSnapshotInstance {
 pub enum MusicPhase {
     Stable,
     WaitingExitCue,
-    PlayingBridge,
+    WaitingNodeCompletion,
     EnteringDestination,
     Stopped,
 }
@@ -95,9 +95,9 @@ pub enum MusicPhase {
 /// 一条等待完成的音乐状态切换。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingMusicTransition {
-    pub from_state: MusicStateId,
-    pub to_state: MusicStateId,
-    pub requested_target: MusicStateId,
+    pub from_node: MusicStateId,
+    pub to_node: MusicStateId,
+    pub requested_target_node: MusicStateId,
     pub trigger: EdgeTrigger,
     pub destination: EntryPolicy,
 }
@@ -107,8 +107,8 @@ pub struct PendingMusicTransition {
 pub struct ActiveMusicSession {
     pub id: MusicSessionId,
     pub graph_id: MusicGraphId,
-    pub desired_state: MusicStateId,
-    pub active_state: MusicStateId,
+    pub desired_target_node: MusicStateId,
+    pub active_node: MusicStateId,
     pub current_entry: EntryPolicy,
     pub phase: MusicPhase,
     pub pending_transition: Option<PendingMusicTransition>,
@@ -119,8 +119,8 @@ pub struct ActiveMusicSession {
 pub struct MusicStatus {
     pub session_id: MusicSessionId,
     pub graph_id: MusicGraphId,
-    pub desired_state: MusicStateId,
-    pub active_state: MusicStateId,
+    pub desired_target_node: MusicStateId,
+    pub active_node: MusicStateId,
     pub phase: MusicPhase,
     pub current_track_id: Option<TrackId>,
     pub current_target: PlaybackTarget,
@@ -352,11 +352,11 @@ impl QueuedRuntime {
     }
 
     /// 通知运行时：桥接片段已经结束。
-    pub fn complete_music_bridge(
+    pub fn complete_music_node_completion(
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), RuntimeError> {
-        self.runtime.complete_music_bridge(session_id)
+        self.runtime.complete_music_node_completion(session_id)
     }
 
     /// 停止一个音乐会话。
@@ -813,8 +813,8 @@ impl SonaraRuntime {
             .music_graphs
             .get(&graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
-        let active_state = resolve_music_graph_state(graph, initial_state)?;
-        let state = lookup_music_state(graph, active_state)?;
+        let active_node = resolve_music_graph_state(graph, initial_state)?;
+        let state = lookup_music_node(graph, active_node)?;
         let session_id = MusicSessionId(self.next_music_session_id);
         self.next_music_session_id += 1;
 
@@ -823,8 +823,8 @@ impl SonaraRuntime {
             ActiveMusicSession {
                 id: session_id,
                 graph_id,
-                desired_state: active_state,
-                active_state,
+                desired_target_node: active_node,
+                active_node,
                 current_entry: state.default_entry.clone(),
                 phase: MusicPhase::Stable,
                 pending_transition: None,
@@ -840,12 +840,12 @@ impl SonaraRuntime {
         session_id: MusicSessionId,
         target_state: MusicStateId,
     ) -> Result<(), RuntimeError> {
-        let (graph_id, active_state, phase) = {
+        let (graph_id, active_node, phase) = {
             let session = self
                 .music_sessions
                 .get(&session_id)
                 .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-            (session.graph_id, session.active_state, session.phase)
+            (session.graph_id, session.active_node, session.phase)
         };
 
         if phase == MusicPhase::Stopped {
@@ -860,34 +860,34 @@ impl SonaraRuntime {
             .music_graphs
             .get(&graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(graph_id))?;
-        let target_node = lookup_music_state(graph, target_state)?;
+        let target_node = lookup_music_node(graph, target_state)?;
         if !target_node.externally_targetable {
             return Err(RuntimeError::MusicTransitionNotFound {
                 graph_id,
-                from: active_state,
+                from: active_node,
                 to: target_state,
             });
         }
 
-        if active_state == target_state {
+        if active_node == target_state {
             let session = self
                 .music_sessions
                 .get_mut(&session_id)
                 .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-            session.desired_state = target_state;
+            session.desired_target_node = target_state;
             session.phase = MusicPhase::Stable;
             session.pending_transition = None;
             return Ok(());
         }
 
-        let transition = lookup_transition_rule(graph, active_state, target_state)?.clone();
+        let transition = lookup_transition_rule(graph, active_node, target_state)?.clone();
         let pending_transition =
-            Self::build_pending_transition(active_state, target_state, &transition);
+            Self::build_pending_transition(active_node, target_state, &transition);
         let session = self
             .music_sessions
             .get_mut(&session_id)
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-        session.desired_state = target_state;
+        session.desired_target_node = target_state;
 
         if matches!(transition.trigger, EdgeTrigger::Immediate) {
             self.enter_music_node(
@@ -927,29 +927,29 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        lookup_music_state(graph, target_state)?;
+        lookup_music_node(graph, target_state)?;
 
-        if session.active_state == target_state {
+        if session.active_node == target_state {
             return Ok(None);
         }
 
-        let transition = lookup_transition_rule(graph, session.active_state, target_state)?;
+        let transition = lookup_transition_rule(graph, session.active_node, target_state)?;
         Ok(Some(Self::build_pending_transition(
-            session.active_state,
+            session.active_node,
             target_state,
             transition,
         )))
     }
 
     fn build_pending_transition(
-        from_state: MusicStateId,
-        requested_target: MusicStateId,
+        from_node: MusicStateId,
+        requested_target_node: MusicStateId,
         transition: &TransitionRule,
     ) -> PendingMusicTransition {
         PendingMusicTransition {
-            from_state,
-            to_state: transition.to,
-            requested_target,
+            from_node,
+            to_node: transition.to,
+            requested_target_node,
             trigger: transition.trigger.clone(),
             destination: transition.destination.clone(),
         }
@@ -959,7 +959,7 @@ impl SonaraRuntime {
         &mut self,
         session_id: MusicSessionId,
         node_id: MusicStateId,
-        requested_target: MusicStateId,
+        requested_target_node: MusicStateId,
         entry_policy: EntryPolicy,
     ) -> Result<(), RuntimeError> {
         let (graph_id, next_edge) = {
@@ -971,10 +971,10 @@ impl SonaraRuntime {
                 .music_graphs
                 .get(&session.graph_id)
                 .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-            lookup_music_state(graph, node_id)?;
+            lookup_music_node(graph, node_id)?;
             (
                 session.graph_id,
-                lookup_auto_transition_rule(graph, node_id, requested_target).cloned(),
+                lookup_auto_transition_rule(graph, node_id, requested_target_node).cloned(),
             )
         };
 
@@ -982,17 +982,17 @@ impl SonaraRuntime {
             .music_sessions
             .get_mut(&session_id)
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
-        session.active_state = node_id;
+        session.active_node = node_id;
         session.current_entry = entry_policy;
-        session.desired_state = requested_target;
+        session.desired_target_node = requested_target_node;
 
         if let Some(edge) = next_edge {
             session.pending_transition = Some(Self::build_pending_transition(
                 node_id,
-                requested_target,
+                requested_target_node,
                 &edge,
             ));
-            session.phase = MusicPhase::PlayingBridge;
+            session.phase = MusicPhase::WaitingNodeCompletion;
         } else {
             session.phase = MusicPhase::Stable;
             session.pending_transition = None;
@@ -1022,16 +1022,16 @@ impl SonaraRuntime {
             .clone()
             .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
 
-        let to_state = pending.to_state;
-        let requested_target = pending.requested_target;
+        let to_node = pending.to_node;
+        let requested_target_node = pending.requested_target_node;
         let destination = pending.destination.clone();
         let _ = session;
 
-        self.enter_music_node(session_id, to_state, requested_target, destination)
+        self.enter_music_node(session_id, to_node, requested_target_node, destination)
     }
 
-    /// 通知运行时：桥接片段已经结束，可以进入目标状态。
-    pub fn complete_music_bridge(
+    /// 通知运行时：当前自动推进节点已经完成，可以进入目标节点。
+    pub fn complete_music_node_completion(
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), RuntimeError> {
@@ -1040,10 +1040,10 @@ impl SonaraRuntime {
             .get_mut(&session_id)
             .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
 
-        if session.phase != MusicPhase::PlayingBridge {
+        if session.phase != MusicPhase::WaitingNodeCompletion {
             return Err(RuntimeError::MusicSessionPhaseMismatch {
                 session_id,
-                expected: MusicPhase::PlayingBridge,
+                expected: MusicPhase::WaitingNodeCompletion,
                 actual: session.phase,
             });
         }
@@ -1053,12 +1053,12 @@ impl SonaraRuntime {
             .clone()
             .ok_or(RuntimeError::MusicSessionHasNoPendingTransition(session_id))?;
 
-        let to_state = pending.to_state;
-        let requested_target = pending.requested_target;
+        let to_node = pending.to_node;
+        let requested_target_node = pending.requested_target_node;
         let destination = pending.destination.clone();
         let _ = session;
 
-        self.enter_music_node(session_id, to_state, requested_target, destination)
+        self.enter_music_node(session_id, to_node, requested_target_node, destination)
     }
 
     /// 停止一个音乐会话。
@@ -1086,20 +1086,20 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        let state = lookup_music_state(graph, session.active_state)?;
+        let state = lookup_music_node(graph, session.active_node)?;
         let current_track_id = state.primary_binding(graph).map(|binding| binding.track_id);
 
         Ok(MusicStatus {
             session_id,
             graph_id: session.graph_id,
-            desired_state: session.desired_state,
-            active_state: session.active_state,
+            desired_target_node: session.desired_target_node,
+            active_node: session.active_node,
             phase: session.phase,
             current_track_id,
             current_target: state.primary_target(graph).cloned().ok_or(
                 RuntimeError::MusicStateNotFound {
                     graph_id: graph.id,
-                    state_id: session.active_state,
+                    state_id: session.active_node,
                 },
             )?,
             pending_transition: session.pending_transition.clone(),
@@ -1139,7 +1139,7 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        let state = lookup_music_state(graph, session.active_state)?;
+        let state = lookup_music_node(graph, session.active_node)?;
         let Some(slot_id) = state.memory_slot else {
             return Ok(false);
         };
@@ -1168,12 +1168,12 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        let state = lookup_music_state(graph, session.active_state)?;
+        let state = lookup_music_node(graph, session.active_node)?;
         let binding = state
             .primary_binding(graph)
             .ok_or(RuntimeError::MusicStateNotFound {
                 graph_id: graph.id,
-                state_id: session.active_state,
+                state_id: session.active_node,
             })?;
         let clip_id = match &binding.target {
             PlaybackTarget::Clip { clip_id } => clip_id,
@@ -1201,7 +1201,7 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        let state = lookup_music_state(graph, session.active_state)?;
+        let state = lookup_music_node(graph, session.active_node)?;
         let Some(binding) = state.binding_for_role(graph, sonara_model::TrackRole::Stinger) else {
             return Ok(None);
         };
@@ -1237,12 +1237,12 @@ impl SonaraRuntime {
             .music_graphs
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
-        let state = lookup_music_state(graph, session.active_state)?;
+        let state = lookup_music_node(graph, session.active_node)?;
         let clip_id = match state
             .primary_target(graph)
             .ok_or(RuntimeError::MusicStateNotFound {
                 graph_id: graph.id,
-                state_id: session.active_state,
+                state_id: session.active_node,
             })? {
             PlaybackTarget::Clip { clip_id } => clip_id,
         };
@@ -1698,7 +1698,7 @@ fn resolve_music_graph_state(
     requested_state: Option<MusicStateId>,
 ) -> Result<MusicStateId, RuntimeError> {
     if let Some(state_id) = requested_state.or(graph.initial_node) {
-        lookup_music_state(graph, state_id)?;
+        lookup_music_node(graph, state_id)?;
         return Ok(state_id);
     }
 
@@ -1711,24 +1711,24 @@ fn resolve_music_graph_state(
         .ok_or(RuntimeError::MusicGraphHasNoStates(graph.id))
 }
 
-fn lookup_music_state(
+fn lookup_music_node(
     graph: &MusicGraph,
-    state_id: MusicStateId,
+    node_id: MusicStateId,
 ) -> Result<&MusicStateNode, RuntimeError> {
     graph
         .nodes
         .iter()
-        .find(|node| node.id == state_id)
+        .find(|node| node.id == node_id)
         .ok_or(RuntimeError::MusicStateNotFound {
             graph_id: graph.id,
-            state_id,
+            state_id: node_id,
         })
 }
 
 fn lookup_transition_rule(
     graph: &MusicGraph,
     from: MusicStateId,
-    requested_target: MusicStateId,
+    requested_target_node: MusicStateId,
 ) -> Result<&TransitionRule, RuntimeError> {
     graph
         .edges
@@ -1736,26 +1736,26 @@ fn lookup_transition_rule(
         .find(|edge| {
             edge.from == from
                 && !matches!(edge.trigger, EdgeTrigger::OnComplete)
-                && edge.requested_target.unwrap_or(edge.to) == requested_target
+                && edge.requested_target.unwrap_or(edge.to) == requested_target_node
         })
         .ok_or(RuntimeError::MusicTransitionNotFound {
             graph_id: graph.id,
             from,
-            to: requested_target,
+            to: requested_target_node,
         })
 }
 
 fn lookup_auto_transition_rule(
     graph: &MusicGraph,
     from: MusicStateId,
-    requested_target: MusicStateId,
+    requested_target_node: MusicStateId,
 ) -> Option<&TransitionRule> {
     graph.edges.iter().find(|edge| {
         edge.from == from
             && matches!(edge.trigger, EdgeTrigger::OnComplete)
             && edge
                 .requested_target
-                .map(|target| target == requested_target)
+                .map(|target| target == requested_target_node)
                 .unwrap_or(true)
     })
 }
@@ -2275,8 +2275,8 @@ mod tests {
             .music_status(session_id)
             .expect("music status should resolve");
 
-        assert_eq!(status.active_state, combat_state);
-        assert_eq!(status.desired_state, combat_state);
+        assert_eq!(status.active_node, combat_state);
+        assert_eq!(status.desired_target_node, combat_state);
         assert_eq!(status.phase, MusicPhase::Stable);
     }
 
@@ -2387,8 +2387,8 @@ mod tests {
         let waiting_status = runtime
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(waiting_status.active_state, preheat_state);
-        assert_eq!(waiting_status.desired_state, boss_state);
+        assert_eq!(waiting_status.active_node, preheat_state);
+        assert_eq!(waiting_status.desired_target_node, boss_state);
         assert_eq!(waiting_status.phase, MusicPhase::WaitingExitCue);
         assert_eq!(waiting_status.current_track_id, Some(main_track.id));
 
@@ -2398,7 +2398,7 @@ mod tests {
         let bridge_status = runtime
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(bridge_status.phase, MusicPhase::PlayingBridge);
+        assert_eq!(bridge_status.phase, MusicPhase::WaitingNodeCompletion);
         assert_eq!(bridge_status.current_track_id, Some(bridge_track.id));
 
         let bridge_playback = runtime
@@ -2408,13 +2408,13 @@ mod tests {
         assert_eq!(bridge_playback.track_id, Some(bridge_track.id));
 
         runtime
-            .complete_music_bridge(session_id)
+            .complete_music_node_completion(session_id)
             .expect("bridge completion should succeed");
         let stable_status = runtime
             .music_status(session_id)
             .expect("music status should resolve");
-        assert_eq!(stable_status.active_state, boss_state);
-        assert_eq!(stable_status.desired_state, boss_state);
+        assert_eq!(stable_status.active_node, boss_state);
+        assert_eq!(stable_status.desired_target_node, boss_state);
         assert_eq!(stable_status.phase, MusicPhase::Stable);
         assert!(stable_status.pending_transition.is_none());
     }

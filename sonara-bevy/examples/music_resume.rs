@@ -326,7 +326,7 @@ fn update_music_zone(
     let status = audio
         .music_status(session_id)
         .expect("music status should resolve for resume demo");
-    let current_state = status.active_state;
+    let current_state = status.active_node;
     let now_seconds = time.elapsed_secs_f64();
 
     if current_state == state.explore_state {
@@ -371,13 +371,13 @@ fn refresh_hud_text(audio: &SonaraAudio, state: &mut ResumeZoneState, now_second
     let status = audio
         .music_status(session_id)
         .expect("music status should resolve for resume demo");
-    let active_label = state_label(status.active_state, state);
-    let desired_label = state_label(status.desired_state, state);
+    let active_label = state_label(status.active_node, state);
+    let desired_label = state_label(status.desired_target_node, state);
     let explore_away = away_text(state.explore_left_at, now_seconds);
     let combat_away = away_text(state.combat_left_at, now_seconds);
 
     state.hud_text = format!(
-        "Sonara music_resume\nWASD or arrow keys move the blue sphere\nenter the red circle -> request combat\nleave the red circle -> request explore\n\nGoal: hear per-state resume memory\n- return within {ttl:.0}s: resumes near last exit point\n- stay away longer than {ttl:.0}s: restarts from clip start\n\ninside zone: {inside}\nactive_state: {active}\ndesired_state: {desired}\nphase: {phase:?}\nsession: {session:?}\n\nexplore away: {explore_away}\ncombat away: {combat_away}",
+        "Sonara music_resume\nWASD or arrow keys move the blue sphere\nenter the red circle -> request combat\nleave the red circle -> request explore\n\nGoal: hear per-state resume memory\n- return within {ttl:.0}s: resumes near last exit point\n- stay away longer than {ttl:.0}s: restarts from clip start\n\ninside zone: {inside}\nactive_node: {active}\ndesired_target_node: {desired}\nphase: {phase:?}\nsession: {session:?}\n\nexplore away: {explore_away}\ncombat away: {combat_away}",
         ttl = RESUME_TTL_SECONDS,
         inside = state.inside_zone,
         active = active_label,

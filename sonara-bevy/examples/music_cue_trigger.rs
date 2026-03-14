@@ -173,7 +173,9 @@ fn handle_demo_input(
     if status.phase != MusicPhase::Stable {
         return;
     }
-    if status.active_state != state.preheat_state || status.desired_state != state.preheat_state {
+    if status.active_node != state.preheat_state
+        || status.desired_target_node != state.preheat_state
+    {
         return;
     }
 
@@ -228,14 +230,14 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
 
     let phase_hint = match status.phase {
         MusicPhase::WaitingExitCue => "waiting for next battle_ready cue",
-        MusicPhase::PlayingBridge => "bridge is playing",
-        MusicPhase::Stable if status.active_state == state.combat_state => "combat active",
+        MusicPhase::WaitingNodeCompletion => "bridge is playing",
+        MusicPhase::Stable if status.active_node == state.combat_state => "combat active",
         MusicPhase::Stable => "preheat active",
         _ => "transitioning",
     };
 
     state.prompt_text = match status.phase {
-        MusicPhase::Stable if status.active_state == state.preheat_state => {
+        MusicPhase::Stable if status.active_node == state.preheat_state => {
             if pending_media {
                 "Loading music resources...\nYou can press Space early; Sonara will wait for the cue once playback starts".into()
             } else {
@@ -250,10 +252,10 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
                 "Combat requested\nWaiting for the next battle_ready cue...".into()
             }
         }
-        MusicPhase::PlayingBridge => {
+        MusicPhase::WaitingNodeCompletion => {
             "Bridge playing...\nBoss music will enter after this clip".into()
         }
-        MusicPhase::Stable if status.active_state == state.combat_state => {
+        MusicPhase::Stable if status.active_node == state.combat_state => {
             "Combat is active\nPress R to reset back to preheat".into()
         }
         MusicPhase::Stopped => "Session stopped\nPress R to restart the demo".into(),
@@ -261,9 +263,9 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut CueTriggerState) {
     };
 
     state.hud_text = format!(
-        "Sonara music_cue_trigger\n\nGoal: hear [2] waiting for the next cue before switching\nPress R to reset the session back to preheat\nThis demo intentionally locks the transition once started\n\nactive_state: {}\ndesired_state: {}\nphase: {:?}\nhint: {}\nloading_media: {}\nplayhead_seconds: {}",
-        state_label(status.active_state, state),
-        state_label(status.desired_state, state),
+        "Sonara music_cue_trigger\n\nGoal: hear [2] waiting for the next cue before switching\nPress R to reset the session back to preheat\nThis demo intentionally locks the transition once started\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nloading_media: {}\nplayhead_seconds: {}",
+        state_label(status.active_node, state),
+        state_label(status.desired_target_node, state),
         status.phase,
         phase_hint,
         if pending_media { "yes" } else { "no" },

@@ -261,8 +261,8 @@ reset_music_memory(memory_slot)
 
 `MusicStatus` 至少应包含：
 
-- `desired_state`
-- `active_state`
+- `desired_target_node`
+- `active_node`
 - `phase`
 - `current_target`
 - `pending_transition`
@@ -271,7 +271,7 @@ reset_music_memory(memory_slot)
 
 - `Stable`
 - `WaitingExitCue`
-- `PlayingBridge`
+- `WaitingNodeCompletion`
 - `EnteringDestination`
 - `Stopped`
 
@@ -306,7 +306,7 @@ play(new_event)
   - 是否正在等待退出点
   - 下一个合法 cue 是什么
   - 目标状态如何进入
-- 管理 `desired_state` 与 `active_state`
+- 管理 `desired_target_node` 与 `active_node`
 - 生成给 backend 的 transport 指令
 
 ### 6.2 backend 负责
@@ -423,11 +423,11 @@ play(new_event)
     - `MusicSession`
     - `PendingTransition`
     - `MusicStatus`
-    - `Stable / WaitingExitCue / PlayingBridge / Stopped`
+    - `Stable / WaitingExitCue / WaitingNodeCompletion / Stopped`
     - `play_music_graph(...)`
     - `request_music_state(...)`
     - `complete_music_exit(...)`
-    - `complete_music_bridge(...)`
+    - `complete_music_node_completion(...)`
     - `stop_music_session(...)`
     - Bevy facade 的音乐会话 API
   - 真实 backend 已接通：
@@ -449,7 +449,7 @@ play(new_event)
       - `cue_trigger.bank.json` 显式声明 `main / bridge` tracks
     - runtime/backend 已开始消费 `Track`
       - `ResolvedMusicPlayback` 会带上当前 `track_id`
-      - `PlayingBridge` 阶段会解析到 `Bridge` track
+      - `WaitingNodeCompletion` 阶段会解析到 `Bridge` track
       - Firewheel backend 已按 `session + track` 记住当前激活的音乐内容
     - 节点化重构已经开始落代码
       - `bridge` 已能通过显式 `Transition` 风格节点 + `OnComplete` 边来表达
@@ -465,10 +465,10 @@ play(new_event)
 
 已知问题（暂不修复）：
 
-- 当前 `[2]` 的第一版实现中，如果在 `WaitingExitCue` 或 `PlayingBridge` 阶段反向请求状态切换，`sonara-firewheel` 可能出现音乐会话静音。
+- 当前 `[2]` 的第一版实现中，如果在 `WaitingExitCue` 或 `WaitingNodeCompletion` 阶段反向请求状态切换，`sonara-firewheel` 可能出现音乐会话静音。
   - 更可能的原因是旧 worker 完成回调与新 worker 挂载时序冲突，而不是 `MusicGraph` 状态机本身出错。
   - 当前 MVP 先按《八方旅人》式语义处理：
-    - `WaitingExitCue` 和 `PlayingBridge` 视为锁定阶段
+    - `WaitingExitCue` 和 `WaitingNodeCompletion` 视为锁定阶段
     - example 层不再提供中途反向切换，而是通过重置会话回到 `preheat`
 
 当前最接近的下一步：
@@ -505,7 +505,7 @@ play(new_event)
 5. runtime 状态推进与真实音频执行解耦
    - runtime 继续维护：
      - `WaitingExitCue`
-     - `PlayingBridge`
+     - `WaitingNodeCompletion`
      - `Stable`
    - backend 新增更明确的 pending action / scheduled handoff bookkeeping
    - 音频动作先排好，runtime 只在时刻到达后推进 bookkeeping
@@ -1241,7 +1241,7 @@ backend 侧新增：
 - `[1]` 每个 `memory_slot` 的播放头记忆
 - `[1]` 基于 `MemoryPolicy.ttl` 的过期重置
 - `[2]` 源段等待下一个合法 `Exit Cue`
-- `[2]` 可选 `bridge clip`
+- `[2]` 可选 `bridge node`
 - `[2]` 过渡结束后进入目标状态
 
 建议运行时状态：
@@ -1249,7 +1249,7 @@ backend 侧新增：
 ```text
 Stable
 WaitingExitCue
-PlayingBridge
+WaitingNodeCompletion
 EnteringDestination
 Stopped
 ```
@@ -1277,7 +1277,7 @@ Stopped
   - `play_music_graph(...)`
   - `request_music_state(...)`
   - `complete_music_exit(...)`
-  - `complete_music_bridge(...)`
+  - `complete_music_node_completion(...)`
   - `music_status(...)`
 - 但这仍是逻辑状态机，不是端到端可听见的音乐切换
 - 本阶段真正完成的标志，仍然是：
