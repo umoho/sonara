@@ -21,12 +21,12 @@ use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
     AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
     MusicGraph, MusicGraphId, MusicNodeId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
-    SyncDomain, TrackId,
+    SyncDomain, TrackGroupId, TrackId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, MusicPhase,
     MusicSessionId, MusicStatus, PlaybackPlan, ResolvedMusicPlayback, RuntimeCommandBuffer,
-    RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime,
+    RuntimeError, RuntimeRequest, RuntimeRequestResult, SonaraRuntime, TrackGroupState,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -469,6 +469,28 @@ impl FirewheelBackend {
         Ok(self.runtime.music_status(session_id)?)
     }
 
+    /// 查询一个音乐会话中某个显式 track group 的当前状态。
+    pub fn music_track_group_state(
+        &self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+    ) -> Result<TrackGroupState, FirewheelBackendError> {
+        Ok(self.runtime.music_track_group_state(session_id, group_id)?)
+    }
+
+    /// 设置一个音乐会话中某个显式 track group 的开关状态。
+    pub fn set_music_track_group_active(
+        &mut self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+        active: bool,
+    ) -> Result<(), FirewheelBackendError> {
+        self.runtime
+            .set_music_track_group_active(session_id, group_id, active)?;
+        self.sync_music_session_playback(session_id)?;
+        Ok(())
+    }
+
     /// 当前音乐会话是否还在等待媒体资源就绪。
     pub fn music_session_pending_media(&self, session_id: MusicSessionId) -> bool {
         self.pending_music_playbacks.contains_key(&session_id)
@@ -804,9 +826,21 @@ impl FirewheelBackend {
             MusicPhase::Stable | MusicPhase::EnteringDestination => {
                 self.pending_exit_cues.remove(&session_id);
                 self.pending_node_completions.remove(&session_id);
-                let resolved_music = self
+                let resolved_music = match self
                     .runtime
-                    .resolve_music_playback(session_id, self.audio_clock_seconds())?;
+                    .resolve_music_playback(session_id, self.audio_clock_seconds())
+                {
+                    Ok(resolved_music) => resolved_music,
+                    Err(RuntimeError::MusicNodeHasNoActiveTrack { .. }) => {
+                        self.pending_music_playbacks.remove(&session_id);
+                        self.stop_music_session_workers(session_id, 0.0);
+                        self.active_music_clips.remove(&session_id);
+                        self.active_music_tracks.remove(&session_id);
+                        self.update()?;
+                        return Ok(());
+                    }
+                    Err(err) => return Err(err.into()),
+                };
                 let clip_id = resolved_music.clip_id;
                 let track_id = resolved_music.track_id;
 
@@ -822,9 +856,21 @@ impl FirewheelBackend {
             }
             MusicPhase::WaitingNodeCompletion => {
                 self.pending_exit_cues.remove(&session_id);
-                let resolved_music = self
+                let resolved_music = match self
                     .runtime
-                    .resolve_music_playback(session_id, self.audio_clock_seconds())?;
+                    .resolve_music_playback(session_id, self.audio_clock_seconds())
+                {
+                    Ok(resolved_music) => resolved_music,
+                    Err(RuntimeError::MusicNodeHasNoActiveTrack { .. }) => {
+                        self.pending_music_playbacks.remove(&session_id);
+                        self.stop_music_session_workers(session_id, 0.0);
+                        self.active_music_clips.remove(&session_id);
+                        self.active_music_tracks.remove(&session_id);
+                        self.update()?;
+                        return Ok(());
+                    }
+                    Err(err) => return Err(err.into()),
+                };
                 let clip_id = resolved_music.clip_id;
                 let track_id = resolved_music.track_id;
 

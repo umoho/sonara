@@ -6,13 +6,15 @@ use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
     Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId, ParameterId,
-    ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain,
+    ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
 };
-pub use sonara_runtime::{EventInstanceState, MusicPhase, MusicSessionId, MusicStatus};
+pub use sonara_runtime::{
+    EventInstanceState, MusicPhase, MusicSessionId, MusicStatus, TrackGroupState,
+};
 use thiserror::Error;
 
 /// Sonara 的默认 Bevy 插件入口。
@@ -490,6 +492,41 @@ impl SonaraAudio {
             SonaraBackend::Runtime(runtime) => Ok(runtime.music_status(session_id)?),
             SonaraBackend::Firewheel(backend) => Ok(backend.music_status(session_id)?),
         }
+    }
+
+    /// 查询一个音乐会话中某个显式 track group 的当前状态。
+    pub fn music_track_group_state(
+        &self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+    ) -> Result<TrackGroupState, AudioBackendError> {
+        match &self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                Ok(runtime.music_track_group_state(session_id, group_id)?)
+            }
+            SonaraBackend::Firewheel(backend) => {
+                Ok(backend.music_track_group_state(session_id, group_id)?)
+            }
+        }
+    }
+
+    /// 设置一个音乐会话中某个显式 track group 的开关状态。
+    pub fn set_music_track_group_active(
+        &mut self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+        active: bool,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                runtime.set_music_track_group_active(session_id, group_id, active)?
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.set_music_track_group_active(session_id, group_id, active)?
+            }
+        }
+
+        Ok(())
     }
 
     /// 当前音乐会话是否还在等待媒体资源就绪。

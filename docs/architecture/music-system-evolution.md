@@ -461,6 +461,15 @@ play(new_event)
     - 基于 cue 的更精确定时切换
     - `ResumeNextMatchingCue`
     - `SyncDomain` 驱动的同步变体切换
+- `阶段 4` 已开始最小对象与运行时基础
+  - `TrackGroup` 已进入 model/build
+  - runtime `MusicSession` 已持有显式 `TrackGroupState`
+  - runtime / bevy / firewheel 已有最小 group 开关查询入口
+  - 主轨 / stinger 解析已经开始按 group 状态过滤
+  - 仍未完成：
+    - 节点内多轨同时发声
+    - 组级 automation
+    - 共享播放头驱动的真正 `[3]` 变体切换
 
 已知问题（暂不修复）：
 
@@ -1331,6 +1340,7 @@ Stopped
 - `shared_playhead`
   - 以节点 `primary_track` 的播放位置作为节点级共享播放头
 - `TrackGroup` 激活状态
+  - 第一版已经进入 session 运行时状态，并可由 API 显式开关
 - 组级静音 / 权重 / 自动化执行
 - `SyncCursor`
   - 只有在切到另一组独立内容时，才需要把共享播放头映射到目标变体

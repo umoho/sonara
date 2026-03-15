@@ -6,7 +6,7 @@ use sonara_model::{
     Bank, BankId, BankObjects, BusId, Clip, ClipId, EdgeTrigger, EntryPolicy, Event,
     EventContentNode, EventId, MusicEdge, MusicGraph, MusicGraphId, MusicNode, MusicNodeId, NodeId,
     NodeRef, ParameterId, ParameterValue, PlaybackTarget, ResumeSlot, ResumeSlotId, Snapshot,
-    SnapshotId, SyncDomain, SyncDomainId, TrackId,
+    SnapshotId, SyncDomain, SyncDomainId, TrackGroupId, TrackGroupMode, TrackId, TrackRole,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -112,6 +112,13 @@ pub struct ActiveMusicSession {
     pub current_entry: EntryPolicy,
     pub phase: MusicPhase,
     pub pending_transition: Option<PendingMusicTransition>,
+    pub track_group_states: HashMap<TrackGroupId, TrackGroupState>,
+}
+
+/// 运行时某个 track group 的最小状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackGroupState {
+    pub active: bool,
 }
 
 /// 对游戏逻辑暴露的音乐会话状态快照。
@@ -123,8 +130,9 @@ pub struct MusicStatus {
     pub active_node: MusicNodeId,
     pub phase: MusicPhase,
     pub current_track_id: Option<TrackId>,
-    pub current_target: PlaybackTarget,
+    pub current_target: Option<PlaybackTarget>,
     pub pending_transition: Option<PendingMusicTransition>,
+    pub track_group_states: HashMap<TrackGroupId, TrackGroupState>,
 }
 
 /// 一个记忆槽当前保存的播放头。
@@ -373,6 +381,26 @@ impl QueuedRuntime {
         self.runtime.music_status(session_id)
     }
 
+    /// 查询一个音乐会话中某个显式 track group 的当前状态。
+    pub fn music_track_group_state(
+        &self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+    ) -> Result<TrackGroupState, RuntimeError> {
+        self.runtime.music_track_group_state(session_id, group_id)
+    }
+
+    /// 设置一个音乐会话中某个显式 track group 的开关状态。
+    pub fn set_music_track_group_active(
+        &mut self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+        active: bool,
+    ) -> Result<(), RuntimeError> {
+        self.runtime
+            .set_music_track_group_active(session_id, group_id, active)
+    }
+
     /// 取出当前待处理请求。
     pub fn drain_requests(&mut self) -> Vec<RuntimeRequest> {
         self.command_buffer.drain()
@@ -605,6 +633,11 @@ pub enum RuntimeError {
         graph_id: MusicGraphId,
         node_id: MusicNodeId,
     },
+    #[error("music graph `{graph_id:?}` has no active playable track on node `{node_id:?}`")]
+    MusicNodeHasNoActiveTrack {
+        graph_id: MusicGraphId,
+        node_id: MusicNodeId,
+    },
     #[error("music session `{0:?}` 不存在")]
     MusicSessionNotFound(MusicSessionId),
     #[error("music graph `{graph_id:?}` has no edge `{from:?} -> {to:?}`")]
@@ -612,6 +645,11 @@ pub enum RuntimeError {
         graph_id: MusicGraphId,
         from: MusicNodeId,
         to: MusicNodeId,
+    },
+    #[error("music graph `{graph_id:?}` has no track group `{group_id:?}`")]
+    MusicTrackGroupNotFound {
+        graph_id: MusicGraphId,
+        group_id: TrackGroupId,
     },
     #[error("music session `{session_id:?}` expected phase `{expected:?}`, got `{actual:?}`")]
     MusicSessionPhaseMismatch {
@@ -817,6 +855,11 @@ impl SonaraRuntime {
         let node = lookup_music_node(graph, active_node)?;
         let session_id = MusicSessionId(self.next_music_session_id);
         self.next_music_session_id += 1;
+        let track_group_states = graph
+            .groups
+            .iter()
+            .map(|group| (group.id, TrackGroupState { active: true }))
+            .collect();
 
         self.music_sessions.insert(
             session_id,
@@ -828,6 +871,7 @@ impl SonaraRuntime {
                 current_entry: node.default_entry.clone(),
                 phase: MusicPhase::Stable,
                 pending_transition: None,
+                track_group_states,
             },
         );
 
@@ -1083,6 +1127,87 @@ impl SonaraRuntime {
         Ok(())
     }
 
+    /// 查询一个音乐会话中某个显式 track group 的当前状态。
+    pub fn music_track_group_state(
+        &self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+    ) -> Result<TrackGroupState, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        graph
+            .group(group_id)
+            .ok_or(RuntimeError::MusicTrackGroupNotFound {
+                graph_id: graph.id,
+                group_id,
+            })?;
+        Ok(Self::track_group_state_for_session(session, group_id))
+    }
+
+    /// 设置一个音乐会话中某个显式 track group 的开关状态。
+    pub fn set_music_track_group_active(
+        &mut self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+        active: bool,
+    ) -> Result<(), RuntimeError> {
+        let (graph_id, group_mode, exclusive_groups) = {
+            let session = self
+                .music_sessions
+                .get(&session_id)
+                .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+            let graph = self
+                .music_graphs
+                .get(&session.graph_id)
+                .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+            let group = graph
+                .group(group_id)
+                .ok_or(RuntimeError::MusicTrackGroupNotFound {
+                    graph_id: graph.id,
+                    group_id,
+                })?;
+            (
+                graph.id,
+                group.mode,
+                graph
+                    .groups
+                    .iter()
+                    .filter(|candidate| candidate.mode == TrackGroupMode::Exclusive)
+                    .map(|candidate| candidate.id)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let session = self
+            .music_sessions
+            .get_mut(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+
+        if active && group_mode == TrackGroupMode::Exclusive {
+            for exclusive_group_id in exclusive_groups {
+                session.track_group_states.insert(
+                    exclusive_group_id,
+                    TrackGroupState {
+                        active: exclusive_group_id == group_id,
+                    },
+                );
+            }
+        } else {
+            session
+                .track_group_states
+                .insert(group_id, TrackGroupState { active });
+        }
+
+        let _ = graph_id;
+        Ok(())
+    }
+
     /// 读取音乐会话当前对游戏侧可见的状态。
     pub fn music_status(&self, session_id: MusicSessionId) -> Result<MusicStatus, RuntimeError> {
         let session = self
@@ -1094,7 +1219,7 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_node(graph, session.active_node)?;
-        let current_track_id = state.primary_binding(graph).map(|binding| binding.track_id);
+        let current_binding = self.resolve_active_primary_binding(session, graph, state);
 
         Ok(MusicStatus {
             session_id,
@@ -1102,14 +1227,10 @@ impl SonaraRuntime {
             desired_target_node: session.desired_target_node,
             active_node: session.active_node,
             phase: session.phase,
-            current_track_id,
-            current_target: state.primary_target(graph).cloned().ok_or(
-                RuntimeError::MusicNodeNotFound {
-                    graph_id: graph.id,
-                    node_id: session.active_node,
-                },
-            )?,
+            current_track_id: current_binding.map(|binding| binding.track_id),
+            current_target: current_binding.map(|binding| binding.target.clone()),
             pending_transition: session.pending_transition.clone(),
+            track_group_states: session.track_group_states.clone(),
         })
     }
 
@@ -1176,9 +1297,9 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_node(graph, session.active_node)?;
-        let binding = state
-            .primary_binding(graph)
-            .ok_or(RuntimeError::MusicNodeNotFound {
+        let binding = self
+            .resolve_active_primary_binding(session, graph, state)
+            .ok_or(RuntimeError::MusicNodeHasNoActiveTrack {
                 graph_id: graph.id,
                 node_id: session.active_node,
             })?;
@@ -1209,7 +1330,9 @@ impl SonaraRuntime {
             .get(&session.graph_id)
             .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
         let state = lookup_music_node(graph, session.active_node)?;
-        let Some(binding) = state.binding_for_role(graph, sonara_model::TrackRole::Stinger) else {
+        let Some(binding) =
+            self.resolve_active_binding_for_role(session, graph, state, TrackRole::Stinger)
+        else {
             return Ok(None);
         };
         let clip_id = match &binding.target {
@@ -1221,6 +1344,40 @@ impl SonaraRuntime {
             track_id: Some(binding.track_id),
             entry_offset_seconds: 0.0,
         }))
+    }
+
+    /// 为当前活动节点解析所有当前激活的 track 播放目标。
+    pub fn resolve_music_node_playbacks(
+        &self,
+        session_id: MusicSessionId,
+        now_seconds: f64,
+    ) -> Result<Vec<ResolvedMusicPlayback>, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+        let node = lookup_music_node(graph, session.active_node)?;
+        let entry_offset_seconds =
+            self.resolve_entry_offset_seconds(node, graph, &session.current_entry, now_seconds);
+
+        Ok(self
+            .active_bindings(session, graph, node)
+            .into_iter()
+            .map(|binding| {
+                let clip_id = match &binding.target {
+                    PlaybackTarget::Clip { clip_id } => *clip_id,
+                };
+                ResolvedMusicPlayback {
+                    clip_id,
+                    track_id: Some(binding.track_id),
+                    entry_offset_seconds,
+                }
+            })
+            .collect())
     }
 
     /// 为当前 waiting transition 解析下一个合法退出 cue。
@@ -1262,6 +1419,88 @@ impl SonaraRuntime {
             tag,
             current_position_seconds,
         ))
+    }
+
+    fn track_group_state_for_session(
+        session: &ActiveMusicSession,
+        group_id: TrackGroupId,
+    ) -> TrackGroupState {
+        session
+            .track_group_states
+            .get(&group_id)
+            .copied()
+            .unwrap_or(TrackGroupState { active: true })
+    }
+
+    fn binding_is_active(
+        &self,
+        session: &ActiveMusicSession,
+        graph: &MusicGraph,
+        binding: &sonara_model::TrackBinding,
+    ) -> bool {
+        let Some(track) = graph.track(binding.track_id) else {
+            return false;
+        };
+        let Some(group_id) = track.group else {
+            return true;
+        };
+
+        Self::track_group_state_for_session(session, group_id).active
+    }
+
+    fn active_bindings<'a>(
+        &self,
+        session: &ActiveMusicSession,
+        graph: &'a MusicGraph,
+        node: &'a MusicNode,
+    ) -> Vec<&'a sonara_model::TrackBinding> {
+        node.bindings
+            .iter()
+            .filter(|binding| self.binding_is_active(session, graph, binding))
+            .collect()
+    }
+
+    fn resolve_active_primary_binding<'a>(
+        &self,
+        session: &ActiveMusicSession,
+        graph: &'a MusicGraph,
+        node: &'a MusicNode,
+    ) -> Option<&'a sonara_model::TrackBinding> {
+        if let Some(track_id) = node.completion_source {
+            if let Some(binding) = node.binding_for_track(track_id) {
+                if self.binding_is_active(session, graph, binding) {
+                    return Some(binding);
+                }
+            }
+        }
+
+        if let Some(track) = graph.main_track() {
+            if let Some(binding) = node.binding_for_track(track.id) {
+                if self.binding_is_active(session, graph, binding) {
+                    return Some(binding);
+                }
+            }
+        }
+
+        self.active_bindings(session, graph, node)
+            .into_iter()
+            .next()
+    }
+
+    fn resolve_active_binding_for_role<'a>(
+        &self,
+        session: &ActiveMusicSession,
+        graph: &'a MusicGraph,
+        node: &'a MusicNode,
+        role: TrackRole,
+    ) -> Option<&'a sonara_model::TrackBinding> {
+        node.bindings.iter().find(|binding| {
+            graph
+                .track(binding.track_id)
+                .map(|track| track.role == role)
+                .unwrap_or(false)
+                && self.binding_is_active(session, graph, binding)
+        })
     }
 
     fn resolve_entry_offset_seconds(
@@ -1804,7 +2043,7 @@ mod tests {
         CuePoint, EdgeTrigger, EntryPolicy, EventContentRoot, EventKind, MemoryPolicy, MusicEdge,
         MusicGraph, MusicNode, MusicNodeId, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
         Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TimeRange,
-        Track, TrackBinding, TrackRole,
+        Track, TrackBinding, TrackGroup, TrackGroupMode, TrackRole,
     };
 
     use super::*;
@@ -2988,11 +3227,228 @@ mod tests {
 
         assert_eq!(
             status.current_target,
-            PlaybackTarget::Clip {
+            Some(PlaybackTarget::Clip {
                 clip_id: main_clip.id,
-            }
+            })
         );
         assert_eq!(resolved.clip_id, main_clip.id);
+    }
+
+    #[test]
+    fn track_group_state_defaults_to_active_and_can_be_toggled() {
+        let clip = Clip::new("layered", Uuid::now_v7());
+        let node_id = MusicNodeId::new();
+        let mut grouped_track = Track::new("music_layer", TrackRole::Layer);
+        let group = TrackGroup::new("combat_layer", TrackGroupMode::Additive);
+        grouped_track.group = Some(group.id);
+
+        let mut graph = MusicGraph::new("layered_music");
+        graph.initial_node = Some(node_id);
+        graph.groups.push(group.clone());
+        graph.tracks.push(grouped_track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "layered".into(),
+            bindings: vec![TrackBinding {
+                track_id: grouped_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(grouped_track.id),
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with track group");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        assert_eq!(
+            runtime
+                .music_track_group_state(session_id, group.id)
+                .expect("group state should resolve"),
+            TrackGroupState { active: true }
+        );
+
+        runtime
+            .set_music_track_group_active(session_id, group.id, false)
+            .expect("track group should toggle");
+        assert_eq!(
+            runtime
+                .music_track_group_state(session_id, group.id)
+                .expect("group state should resolve"),
+            TrackGroupState { active: false }
+        );
+    }
+
+    #[test]
+    fn resolve_music_node_playbacks_filters_inactive_track_groups() {
+        let main_clip = Clip::new("main", Uuid::now_v7());
+        let layer_clip = Clip::new("layer", Uuid::now_v7());
+        let node_id = MusicNodeId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut layer_track = Track::new("combat_layer", TrackRole::Layer);
+        let group = TrackGroup::new("combat_layer", TrackGroupMode::Additive);
+        layer_track.group = Some(group.id);
+
+        let mut graph = MusicGraph::new("layered_music");
+        graph.initial_node = Some(node_id);
+        graph.groups.push(group.clone());
+        graph.tracks.push(main_track.clone());
+        graph.tracks.push(layer_track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "combat".into(),
+            bindings: vec![
+                TrackBinding {
+                    track_id: main_track.id,
+                    target: PlaybackTarget::Clip {
+                        clip_id: main_clip.id,
+                    },
+                },
+                TrackBinding {
+                    track_id: layer_track.id,
+                    target: PlaybackTarget::Clip {
+                        clip_id: layer_clip.id,
+                    },
+                },
+            ],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(main_track.id),
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.extend([main_clip.id, layer_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![main_clip.clone(), layer_clip.clone()],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with layered node");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let all_playbacks = runtime
+            .resolve_music_node_playbacks(session_id, 0.0)
+            .expect("node playbacks should resolve");
+        assert_eq!(all_playbacks.len(), 2);
+
+        runtime
+            .set_music_track_group_active(session_id, group.id, false)
+            .expect("track group should toggle");
+        let filtered_playbacks = runtime
+            .resolve_music_node_playbacks(session_id, 0.0)
+            .expect("node playbacks should resolve");
+        assert_eq!(filtered_playbacks.len(), 1);
+        assert_eq!(filtered_playbacks[0].clip_id, main_clip.id);
+        assert_eq!(filtered_playbacks[0].track_id, Some(main_track.id));
+    }
+
+    #[test]
+    fn activating_exclusive_group_disables_other_exclusive_groups() {
+        let clip = Clip::new("main", Uuid::now_v7());
+        let node_id = MusicNodeId::new();
+        let mut day_track = Track::new("day_main", TrackRole::Layer);
+        let mut night_track = Track::new("night_main", TrackRole::Layer);
+        let day_group = TrackGroup::new("day", TrackGroupMode::Exclusive);
+        let night_group = TrackGroup::new("night", TrackGroupMode::Exclusive);
+        day_track.group = Some(day_group.id);
+        night_track.group = Some(night_group.id);
+
+        let mut graph = MusicGraph::new("day_night");
+        graph.initial_node = Some(node_id);
+        graph.groups.push(day_group.clone());
+        graph.groups.push(night_group.clone());
+        graph.tracks.push(day_track.clone());
+        graph.tracks.push(night_track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "region".into(),
+            bindings: vec![
+                TrackBinding {
+                    track_id: day_track.id,
+                    target: PlaybackTarget::Clip { clip_id: clip.id },
+                },
+                TrackBinding {
+                    track_id: night_track.id,
+                    target: PlaybackTarget::Clip { clip_id: clip.id },
+                },
+            ],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(day_track.id),
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.clips.push(clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load with exclusive groups");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        runtime
+            .set_music_track_group_active(session_id, night_group.id, true)
+            .expect("exclusive group should toggle");
+
+        assert_eq!(
+            runtime
+                .music_track_group_state(session_id, day_group.id)
+                .expect("day group state should resolve"),
+            TrackGroupState { active: false }
+        );
+        assert_eq!(
+            runtime
+                .music_track_group_state(session_id, night_group.id)
+                .expect("night group state should resolve"),
+            TrackGroupState { active: true }
+        );
     }
 
     #[test]
