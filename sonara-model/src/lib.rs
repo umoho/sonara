@@ -23,11 +23,11 @@ pub use event::{
 };
 pub use ids::{
     BankId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicNodeId, ParameterId, ResumeSlotId,
-    SnapshotId, SyncDomainId, TrackId,
+    SnapshotId, SyncDomainId, TrackGroupId, TrackId,
 };
 pub use music::{
     EdgeTrigger, EntryPolicy, MemoryPolicy, MusicEdge, MusicGraph, MusicNode, PlaybackTarget,
-    Track, TrackBinding, TrackRole,
+    Track, TrackBinding, TrackGroup, TrackGroupMode, TrackRole,
 };
 pub use parameter::{
     BoolParameter, EnumParameter, FloatParameter, Parameter, ParameterDefaultValue, ParameterKind,

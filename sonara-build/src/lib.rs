@@ -61,10 +61,14 @@ pub enum BuildError {
     DuplicateMusicNodeId,
     #[error("music graph 中存在重复 track ID")]
     DuplicateTrackId,
+    #[error("music graph 中存在重复 track group ID")]
+    DuplicateTrackGroupId,
     #[error("music graph 引用了不存在的 node")]
     MissingMusicNodeDefinition,
     #[error("music graph 引用了不存在的 track")]
     MissingTrackDefinition,
+    #[error("music graph 引用了不存在的 track group")]
+    MissingTrackGroupDefinition,
     #[error("music graph 引用了不存在的 clip")]
     MissingClipDefinition,
     #[error("music graph 引用了不存在的 resume slot")]
@@ -641,11 +645,23 @@ fn validate_music_graph(
 
     let mut node_ids = HashSet::new();
     let mut track_ids = HashSet::new();
+    let mut track_group_ids = HashSet::new();
     let mut dependencies = MusicGraphDependencies::default();
+
+    for group in &graph.groups {
+        if !track_group_ids.insert(group.id) {
+            return Err(BuildError::DuplicateTrackGroupId);
+        }
+    }
 
     for track in &graph.tracks {
         if !track_ids.insert(track.id) {
             return Err(BuildError::DuplicateTrackId);
+        }
+        if let Some(group_id) = track.group {
+            if !track_group_ids.contains(&group_id) {
+                return Err(BuildError::MissingTrackGroupDefinition);
+            }
         }
     }
 
@@ -788,7 +804,8 @@ mod tests {
         AuthoringProject, Clip, EdgeTrigger, EntryPolicy, EnumParameter, EventContentRoot, EventId,
         EventKind, MemoryPolicy, MusicEdge, MusicGraph, MusicNode, MusicNodeId, Parameter,
         ParameterId, ParameterScope, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
-        SpatialMode, SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackRole,
+        SpatialMode, SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackGroup,
+        TrackGroupMode, TrackRole,
     };
 
     use super::*;
@@ -1359,6 +1376,92 @@ mod tests {
             compile_bank_definition(&definition, &project),
             Err(BuildError::MissingTrackDefinition)
         ));
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_music_graph_track_missing_group() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let node_id = MusicNodeId::new();
+        let mut track = Track::new("main", TrackRole::Main);
+        track.group = Some(sonara_model::TrackGroupId::new());
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(node_id);
+        graph.tracks.push(track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingTrackGroupDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_preserves_music_track_groups() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let node_id = MusicNodeId::new();
+        let group = TrackGroup::new("day_style", TrackGroupMode::Exclusive);
+        let mut track = Track::new("main", TrackRole::Main);
+        track.group = Some(group.id);
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(node_id);
+        graph.groups.push(group.clone());
+        graph.tracks.push(track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        let package = compile_bank_definition(&definition, &project)
+            .expect("bank should compile with track groups");
+        let compiled_graph = package
+            .music_graphs
+            .first()
+            .expect("compiled package should contain the graph");
+
+        assert_eq!(compiled_graph.groups, vec![group]);
+        assert_eq!(
+            compiled_graph.tracks[0].group,
+            Some(compiled_graph.groups[0].id)
+        );
     }
 
     #[test]

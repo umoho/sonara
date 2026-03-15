@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::{ClipId, MusicGraphId, MusicNodeId, ResumeSlotId, TrackId};
+use crate::{ClipId, MusicGraphId, MusicNodeId, ResumeSlotId, TrackGroupId, TrackId};
 
 fn default_true() -> bool {
     true
@@ -16,6 +16,8 @@ pub struct MusicGraph {
     #[serde(default)]
     pub tracks: Vec<Track>,
     #[serde(default)]
+    pub groups: Vec<TrackGroup>,
+    #[serde(default)]
     pub nodes: Vec<MusicNode>,
     #[serde(default)]
     pub edges: Vec<MusicEdge>,
@@ -29,6 +31,7 @@ impl MusicGraph {
             name: name.into(),
             initial_node: None,
             tracks: Vec::new(),
+            groups: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
         }
@@ -49,6 +52,17 @@ impl MusicGraph {
     /// 按角色读取图中声明的 track。
     pub fn track_by_role(&self, role: TrackRole) -> Option<&Track> {
         self.tracks.iter().find(|track| track.role == role)
+    }
+
+    /// 查找一个显式声明的 track group。
+    pub fn group(&self, group_id: TrackGroupId) -> Option<&TrackGroup> {
+        self.groups.iter().find(|group| group.id == group_id)
+    }
+
+    /// 读取一条 track 当前所属的显式组。
+    pub fn group_for_track(&self, track_id: TrackId) -> Option<&TrackGroup> {
+        let track = self.track(track_id)?;
+        track.group.and_then(|group_id| self.group(group_id))
     }
 
     /// 查找一个节点定义。
@@ -119,6 +133,8 @@ pub struct Track {
     pub name: SmolStr,
     #[serde(default)]
     pub role: TrackRole,
+    #[serde(default)]
+    pub group: Option<TrackGroupId>,
 }
 
 impl Track {
@@ -128,8 +144,37 @@ impl Track {
             id: TrackId::new(),
             name: name.into(),
             role,
+            group: None,
         }
     }
+}
+
+/// 一组可联动控制的 track。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackGroup {
+    pub id: TrackGroupId,
+    pub name: SmolStr,
+    #[serde(default)]
+    pub mode: TrackGroupMode,
+}
+
+impl TrackGroup {
+    /// 创建一个新的 track group。
+    pub fn new(name: impl Into<SmolStr>, mode: TrackGroupMode) -> Self {
+        Self {
+            id: TrackGroupId::new(),
+            name: name.into(),
+            mode,
+        }
+    }
+}
+
+/// 一组 track 的最小协作模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TrackGroupMode {
+    #[default]
+    Additive,
+    Exclusive,
 }
 
 /// 一条 track 的最小职责类型。
