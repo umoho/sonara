@@ -21,6 +21,7 @@ fn main() {
         .insert_resource(TrackGroupsDemoState::default())
         .add_systems(Startup, setup_scene)
         .add_systems(Update, handle_demo_input)
+        .add_systems(Update, handle_card_clicks)
         .add_systems(Update, sync_ui_text)
         .run();
 }
@@ -29,7 +30,14 @@ fn main() {
 struct HudText;
 
 #[derive(Component)]
-struct PromptText;
+struct TrackCard(TrackCardKind);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrackCardKind {
+    NoBassOrHigh,
+    NoBeachSfx,
+    BeachSfx,
+}
 
 #[derive(Resource)]
 struct TrackGroupsDemoState {
@@ -40,7 +48,6 @@ struct TrackGroupsDemoState {
     no_beach_sfx_group: TrackGroupId,
     beach_sfx_group: TrackGroupId,
     hud_text: String,
-    prompt_text: String,
 }
 
 impl Default for TrackGroupsDemoState {
@@ -53,7 +60,6 @@ impl Default for TrackGroupsDemoState {
             no_beach_sfx_group: TrackGroupId::new(),
             beach_sfx_group: TrackGroupId::new(),
             hud_text: String::new(),
-            prompt_text: String::new(),
         }
     }
 }
@@ -107,7 +113,7 @@ fn setup_scene(
             .expect("track groups graph should start"),
     );
     apply_default_mix(&mut audio, &state);
-    refresh_ui_text(&audio, &mut state);
+    refresh_hud_text(&audio, &mut state);
 
     commands.spawn(Camera2d);
 
@@ -121,7 +127,7 @@ fn setup_scene(
                 border_radius: BorderRadius::all(px(8.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.06, 0.07, 0.09, 0.86)),
+            BackgroundColor(Color::srgba(0.04, 0.05, 0.07, 0.54)),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -145,26 +151,78 @@ fn setup_scene(
         },))
         .with_children(|parent| {
             parent
-                .spawn((
-                    Node {
-                        max_width: px(640.0),
-                        padding: UiRect::axes(px(22.0), px(18.0)),
-                        border_radius: BorderRadius::all(px(14.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.05, 0.06, 0.08, 0.82)),
-                ))
-                .with_children(|prompt| {
-                    prompt.spawn((
-                        Text::new(""),
-                        TextFont {
-                            font_size: 28.0,
+                .spawn((Node {
+                    width: px(664.0),
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    row_gap: px(24.0),
+                    ..default()
+                },))
+                .with_children(|layout| {
+                    layout
+                        .spawn((Node {
+                            width: px(664.0),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
                             ..default()
-                        },
-                        TextColor(Color::srgb(0.98, 0.97, 0.92)),
-                        PromptText,
-                    ));
+                        },))
+                        .with_children(|row| {
+                            spawn_track_card(
+                                row,
+                                TrackCardKind::NoBassOrHigh,
+                                "No Bass or High\nPress [1]",
+                                px(320.0),
+                                px(180.0),
+                            );
+                            spawn_track_card(
+                                row,
+                                TrackCardKind::NoBeachSfx,
+                                "No Beach SFX\nPress [2]",
+                                px(320.0),
+                                px(180.0),
+                            );
+                        });
+
+                    layout
+                        .spawn((Node {
+                            width: px(664.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },))
+                        .with_children(|row| {
+                            spawn_track_card(
+                                row,
+                                TrackCardKind::BeachSfx,
+                                "Beach SFX\nPress [Space]",
+                                px(664.0),
+                                px(112.0),
+                            );
+                        });
                 });
+        });
+
+    commands
+        .spawn((Node {
+            position_type: PositionType::Absolute,
+            right: px(16.0),
+            bottom: px(16.0),
+            width: px(520.0),
+            ..default()
+        },))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(
+                    "COVE OF SAND & SNOW\nVoltz Supreme\nhttps://voltzsupreme.itch.io/jrpg-moods",
+                ),
+                TextFont {
+                    font_size: 17.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.9, 0.92, 0.95)),
+                TextLayout::new_with_justify(Justify::Right),
+            ));
         });
 }
 
@@ -191,25 +249,15 @@ fn handle_demo_input(
     };
 
     if keyboard.just_pressed(KeyCode::Digit1) {
-        audio
-            .set_music_track_group_active(session_id, state.no_bass_or_high_group, true)
-            .expect("no_bass_or_high group should become active");
+        activate_no_bass_or_high(&mut audio, &state, session_id);
     }
 
     if keyboard.just_pressed(KeyCode::Digit2) {
-        audio
-            .set_music_track_group_active(session_id, state.no_beach_sfx_group, true)
-            .expect("no_beach_sfx group should become active");
+        activate_no_beach_sfx(&mut audio, &state, session_id);
     }
 
     if keyboard.just_pressed(KeyCode::Space) {
-        let currently_active = audio
-            .music_track_group_state(session_id, state.beach_sfx_group)
-            .expect("beach_sfx group state should resolve")
-            .active;
-        audio
-            .set_music_track_group_active(session_id, state.beach_sfx_group, !currently_active)
-            .expect("beach_sfx group should toggle");
+        toggle_beach_sfx(&mut audio, &state, session_id);
     }
 
     if keyboard.just_pressed(KeyCode::KeyR) {
@@ -227,27 +275,76 @@ fn handle_demo_input(
     }
 }
 
+fn handle_card_clicks(
+    mut audio: NonSendMut<SonaraAudio>,
+    state: Res<TrackGroupsDemoState>,
+    interaction_query: Query<(&TrackCard, &Interaction), (Changed<Interaction>, With<Button>)>,
+) {
+    let Some(session_id) = state.session_id else {
+        return;
+    };
+
+    for (track_card, interaction) in &interaction_query {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+
+        match track_card.0 {
+            TrackCardKind::NoBassOrHigh => {
+                activate_no_bass_or_high(&mut audio, &state, session_id);
+            }
+            TrackCardKind::NoBeachSfx => {
+                activate_no_beach_sfx(&mut audio, &state, session_id);
+            }
+            TrackCardKind::BeachSfx => {
+                toggle_beach_sfx(&mut audio, &state, session_id);
+            }
+        }
+    }
+}
+
 fn sync_ui_text(
     audio: NonSend<SonaraAudio>,
     mut state: ResMut<TrackGroupsDemoState>,
     mut hud_query: Query<&mut Text, With<HudText>>,
-    mut prompt_query: Query<&mut Text, (With<PromptText>, Without<HudText>)>,
+    mut card_query: Query<(&TrackCard, &mut BackgroundColor)>,
 ) {
-    refresh_ui_text(&audio, &mut state);
+    refresh_hud_text(&audio, &mut state);
 
     if let Ok(mut hud_text) = hud_query.single_mut() {
         *hud_text = Text::new(state.hud_text.clone());
     }
 
-    if let Ok(mut prompt_text) = prompt_query.single_mut() {
-        *prompt_text = Text::new(state.prompt_text.clone());
+    let Some(session_id) = state.session_id else {
+        return;
+    };
+
+    let no_bass_or_high_active = audio
+        .music_track_group_state(session_id, state.no_bass_or_high_group)
+        .expect("no_bass_or_high group state should resolve")
+        .active;
+    let no_beach_sfx_active = audio
+        .music_track_group_state(session_id, state.no_beach_sfx_group)
+        .expect("no_beach_sfx group state should resolve")
+        .active;
+    let beach_sfx_active = audio
+        .music_track_group_state(session_id, state.beach_sfx_group)
+        .expect("beach_sfx group state should resolve")
+        .active;
+
+    for (track_card, mut background) in &mut card_query {
+        let active = match track_card.0 {
+            TrackCardKind::NoBassOrHigh => no_bass_or_high_active,
+            TrackCardKind::NoBeachSfx => no_beach_sfx_active,
+            TrackCardKind::BeachSfx => beach_sfx_active,
+        };
+        *background = BackgroundColor(track_card_color(track_card.0, active));
     }
 }
 
-fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
+fn refresh_hud_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
     let Some(session_id) = state.session_id else {
         state.hud_text = "track groups demo not started".into();
-        state.prompt_text = "Press R to start the track groups demo".into();
         return;
     };
 
@@ -277,14 +374,8 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
         MusicPhase::EnteringDestination => "entering destination",
     };
 
-    state.prompt_text = if pending_media {
-        "Loading loop variants...\nSource: COVE OF SAND & SNOW from JRPG Moods by Voltz Supreme\n1 = No Bass or High, 2 = No Beach SFX, Space = toggle Beach SFX layer, R = restart".into()
-    } else {
-        "Source: COVE OF SAND & SNOW from JRPG Moods by Voltz Supreme\n1 = No Bass or High, 2 = No Beach SFX, Space = toggle Beach SFX layer\nGroup changes should preserve the current shared playhead\nR = restart the demo from the beginning".into()
-    };
-
     state.hud_text = format!(
-        "Sonara music_track_groups\n\nUsing: COVE OF SAND & SNOW\nPack: JRPG Moods\nCreator: Voltz Supreme\nSource: https://voltzsupreme.itch.io/jrpg-moods\n\nNode: shared_loop -> shared_loop [OnComplete]\nTracks: no_bass_or_high, no_beach_sfx, beach_sfx\nGroups: no_bass_or_high (Exclusive), no_beach_sfx (Exclusive), beach_sfx (Additive)\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nno_bass_or_high: {}\nno_beach_sfx: {}\nbeach_sfx: {}\nloading_media: {}\nshared_playhead_seconds: {}",
+        "Sonara music_track_groups\n\nNode: shared_loop -> shared_loop [OnComplete]\nTracks: no_bass_or_high, no_beach_sfx, beach_sfx\nGroups: no_bass_or_high (Exclusive), no_beach_sfx (Exclusive), beach_sfx (Additive)\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nno_bass_or_high: {}\nno_beach_sfx: {}\nbeach_sfx: {}\nloading_media: {}\nshared_playhead_seconds: {}",
         if status.active_node == state.loop_node {
             "shared_loop"
         } else {
@@ -305,4 +396,84 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
             .map(|seconds| format!("{seconds:.2}"))
             .unwrap_or_else(|| "n/a".into()),
     );
+}
+
+fn activate_no_bass_or_high(
+    audio: &mut SonaraAudio,
+    state: &TrackGroupsDemoState,
+    session_id: MusicSessionId,
+) {
+    audio
+        .set_music_track_group_active(session_id, state.no_bass_or_high_group, true)
+        .expect("no_bass_or_high group should become active");
+}
+
+fn activate_no_beach_sfx(
+    audio: &mut SonaraAudio,
+    state: &TrackGroupsDemoState,
+    session_id: MusicSessionId,
+) {
+    audio
+        .set_music_track_group_active(session_id, state.no_beach_sfx_group, true)
+        .expect("no_beach_sfx group should become active");
+}
+
+fn toggle_beach_sfx(
+    audio: &mut SonaraAudio,
+    state: &TrackGroupsDemoState,
+    session_id: MusicSessionId,
+) {
+    let currently_active = audio
+        .music_track_group_state(session_id, state.beach_sfx_group)
+        .expect("beach_sfx group state should resolve")
+        .active;
+    audio
+        .set_music_track_group_active(session_id, state.beach_sfx_group, !currently_active)
+        .expect("beach_sfx group should toggle");
+}
+
+fn spawn_track_card(
+    parent: &mut ChildSpawnerCommands,
+    kind: TrackCardKind,
+    label: &'static str,
+    width: Val,
+    height: Val,
+) {
+    parent
+        .spawn((
+            Node {
+                width,
+                height,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(px(18.0), px(14.0)),
+                border_radius: BorderRadius::all(px(24.0)),
+                ..default()
+            },
+            Button,
+            BackgroundColor(track_card_color(kind, false)),
+            TrackCard(kind),
+        ))
+        .with_children(|card| {
+            card.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.98, 0.98, 0.97)),
+                TextLayout::new_with_justify(Justify::Center),
+            ));
+        });
+}
+
+fn track_card_color(kind: TrackCardKind, active: bool) -> Color {
+    match (kind, active) {
+        (TrackCardKind::NoBassOrHigh, true) => Color::srgb(0.87, 0.71, 0.42),
+        (TrackCardKind::NoBassOrHigh, false) => Color::srgba(0.33, 0.26, 0.16, 0.55),
+        (TrackCardKind::NoBeachSfx, true) => Color::srgb(0.33, 0.55, 0.82),
+        (TrackCardKind::NoBeachSfx, false) => Color::srgba(0.14, 0.22, 0.34, 0.55),
+        (TrackCardKind::BeachSfx, true) => Color::srgb(0.23, 0.74, 0.65),
+        (TrackCardKind::BeachSfx, false) => Color::srgba(0.12, 0.28, 0.25, 0.52),
+    }
 }
