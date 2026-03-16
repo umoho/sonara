@@ -487,9 +487,11 @@ impl FirewheelBackend {
         group_id: TrackGroupId,
         active: bool,
     ) -> Result<(), FirewheelBackendError> {
+        let preserved_entry_offset_seconds =
+            self.current_music_session_entry_offset_seconds(session_id)?;
         self.runtime
             .set_music_track_group_active(session_id, group_id, active)?;
-        self.sync_music_session_playback(session_id)?;
+        self.sync_music_session_playback_with_offset(session_id, preserved_entry_offset_seconds)?;
         Ok(())
     }
 
@@ -831,6 +833,14 @@ impl FirewheelBackend {
         &mut self,
         session_id: MusicSessionId,
     ) -> Result<(), FirewheelBackendError> {
+        self.sync_music_session_playback_with_offset(session_id, None)
+    }
+
+    fn sync_music_session_playback_with_offset(
+        &mut self,
+        session_id: MusicSessionId,
+        entry_offset_override: Option<f64>,
+    ) -> Result<(), FirewheelBackendError> {
         let status = self.runtime.music_status(session_id)?;
 
         match status.phase {
@@ -853,7 +863,7 @@ impl FirewheelBackend {
             MusicPhase::Stable | MusicPhase::EnteringDestination => {
                 self.pending_exit_cues.remove(&session_id);
                 self.pending_node_completions.remove(&session_id);
-                let resolved_music = match self
+                let mut resolved_music = match self
                     .runtime
                     .resolve_music_playback(session_id, self.audio_clock_seconds())
                 {
@@ -869,9 +879,15 @@ impl FirewheelBackend {
                     }
                     Err(err) => return Err(err.into()),
                 };
-                let resolved_playbacks = self
+                let mut resolved_playbacks = self
                     .runtime
                     .resolve_music_node_playbacks(session_id, self.audio_clock_seconds())?;
+                if let Some(entry_offset_seconds) = entry_offset_override {
+                    resolved_music.entry_offset_seconds = entry_offset_seconds;
+                    for playback in &mut resolved_playbacks {
+                        playback.entry_offset_seconds = entry_offset_seconds;
+                    }
+                }
 
                 if self.active_music_clips.get(&session_id) == Some(&resolved_music.clip_id)
                     && self.active_music_tracks.get(&session_id).copied().flatten()
@@ -888,7 +904,7 @@ impl FirewheelBackend {
             }
             MusicPhase::WaitingNodeCompletion => {
                 self.pending_exit_cues.remove(&session_id);
-                let resolved_music = match self
+                let mut resolved_music = match self
                     .runtime
                     .resolve_music_playback(session_id, self.audio_clock_seconds())
                 {
@@ -904,9 +920,15 @@ impl FirewheelBackend {
                     }
                     Err(err) => return Err(err.into()),
                 };
-                let resolved_playbacks = self
+                let mut resolved_playbacks = self
                     .runtime
                     .resolve_music_node_playbacks(session_id, self.audio_clock_seconds())?;
+                if let Some(entry_offset_seconds) = entry_offset_override {
+                    resolved_music.entry_offset_seconds = entry_offset_seconds;
+                    for playback in &mut resolved_playbacks {
+                        playback.entry_offset_seconds = entry_offset_seconds;
+                    }
+                }
 
                 if self.active_music_clips.get(&session_id) == Some(&resolved_music.clip_id)
                     && self.active_music_tracks.get(&session_id).copied().flatten()
@@ -1620,6 +1642,22 @@ impl FirewheelBackend {
             clip_local_seconds,
             self.audio_clock_seconds(),
         )?)
+    }
+
+    fn current_music_session_entry_offset_seconds(
+        &self,
+        session_id: MusicSessionId,
+    ) -> Result<Option<f64>, FirewheelBackendError> {
+        let Some(playhead) = self.music_session_playhead(session_id) else {
+            return Ok(None);
+        };
+        let Some(clip_id) = self.active_music_clips.get(&session_id).copied() else {
+            return Ok(None);
+        };
+        Ok(Some(self.clip_local_position_seconds(
+            clip_id,
+            playhead.position_seconds,
+        )?))
     }
 
     fn clip_local_position_seconds(

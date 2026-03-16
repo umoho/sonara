@@ -1,0 +1,188 @@
+{
+  "bank": {
+    "id": "019e0000-0000-7000-8000-000000000001",
+    "name": "track_groups",
+    "objects": {
+      "events": [],
+      "buses": [],
+      "snapshots": [],
+      "clips": [
+        "019e0000-0000-7000-8000-000000000101",
+        "019e0000-0000-7000-8000-000000000102",
+        "019e0000-0000-7000-8000-000000000103"
+      ],
+      "resume_slots": [],
+      "sync_domains": [],
+      "music_graphs": [
+        "019e0000-0000-7000-8000-000000000201"
+      ]
+    },
+    "manifest": {
+      "assets": [
+        {
+          "id": "019e0000-0000-7000-8000-000000000301",
+          "name": "warmup_day_variant",
+          "source_path": "private_assets/warmup_day_variant.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000302",
+          "name": "warmup_night_variant",
+          "source_path": "private_assets/warmup_night_variant.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000303",
+          "name": "warmup_energy_layer",
+          "source_path": "private_assets/warmup_energy_layer.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        }
+      ],
+      "resident_media": [],
+      "streaming_media": [
+        "019e0000-0000-7000-8000-000000000301",
+        "019e0000-0000-7000-8000-000000000302",
+        "019e0000-0000-7000-8000-000000000303"
+      ]
+    }
+  },
+  "events": [],
+  "buses": [],
+  "snapshots": [],
+  "clips": [
+    {
+      "id": "019e0000-0000-7000-8000-000000000101",
+      "name": "warmup_day_variant",
+      "asset_id": "019e0000-0000-7000-8000-000000000301",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019e0000-0000-7000-8000-000000000102",
+      "name": "warmup_night_variant",
+      "asset_id": "019e0000-0000-7000-8000-000000000302",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019e0000-0000-7000-8000-000000000103",
+      "name": "warmup_energy_layer",
+      "asset_id": "019e0000-0000-7000-8000-000000000303",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    }
+  ],
+  "resume_slots": [],
+  "sync_domains": [],
+  "music_graphs": [
+    {
+      "id": "019e0000-0000-7000-8000-000000000201",
+      "name": "track_groups_demo",
+      "initial_node": "019e0000-0000-7000-8000-000000000501",
+      "tracks": [
+        {
+          "id": "019e0000-0000-7000-8000-000000000601",
+          "name": "day_main",
+          "role": "Main",
+          "group": "019e0000-0000-7000-8000-000000000701"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000602",
+          "name": "night_main",
+          "role": "Main",
+          "group": "019e0000-0000-7000-8000-000000000702"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000603",
+          "name": "energy_layer",
+          "role": "Layer",
+          "group": "019e0000-0000-7000-8000-000000000703"
+        }
+      ],
+      "groups": [
+        {
+          "id": "019e0000-0000-7000-8000-000000000701",
+          "name": "day_style",
+          "mode": "Exclusive"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000702",
+          "name": "night_style",
+          "mode": "Exclusive"
+        },
+        {
+          "id": "019e0000-0000-7000-8000-000000000703",
+          "name": "energy_layer",
+          "mode": "Additive"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "019e0000-0000-7000-8000-000000000501",
+          "name": "shared_loop",
+          "bindings": [
+            {
+              "track_id": "019e0000-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019e0000-0000-7000-8000-000000000101"
+                }
+              }
+            },
+            {
+              "track_id": "019e0000-0000-7000-8000-000000000602",
+              "target": {
+                "Clip": {
+                  "clip_id": "019e0000-0000-7000-8000-000000000102"
+                }
+              }
+            },
+            {
+              "track_id": "019e0000-0000-7000-8000-000000000603",
+              "target": {
+                "Clip": {
+                  "clip_id": "019e0000-0000-7000-8000-000000000103"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": true,
+          "completion_source": "019e0000-0000-7000-8000-000000000601"
+        }
+      ],
+      "edges": [
+        {
+          "from": "019e0000-0000-7000-8000-000000000501",
+          "to": "019e0000-0000-7000-8000-000000000501",
+          "requested_target": null,
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        }
+      ]
+    }
+  ]
+}

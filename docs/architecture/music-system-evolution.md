@@ -469,10 +469,16 @@ play(new_event)
   - `firewheel` 已开始按“当前节点所有激活 track”同步启动播放
     - transition 节点上的 stinger 已并入节点多轨主线
     - 不再通过独立 stinger worker 特判触发
+  - 已新增独立 `[3]` demo：
+    - `music_track_groups`
+    - 单节点 `shared_loop`
+    - 两个互斥风格组 `day_style / night_style`
+    - 一个叠加层组 `energy_layer`
+    - 当前 backend 会在 group 切换时沿用当前主导 track 的播放头秒数重启整组轨，作为共享播放头的第一版实现
   - 仍未完成：
-    - 组切换驱动的节点内多轨控制
+    - 更平滑的组切换执行
     - 组级 automation
-    - 共享播放头驱动的真正 `[3]` 变体切换
+    - 更完整的 `[3]` 变体/层控制
 
 已知问题（暂不修复）：
 
