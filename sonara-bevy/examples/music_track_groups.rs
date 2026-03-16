@@ -36,9 +36,9 @@ struct TrackGroupsDemoState {
     session_id: Option<MusicSessionId>,
     graph_id: MusicGraphId,
     loop_node: MusicNodeId,
-    day_group: TrackGroupId,
-    night_group: TrackGroupId,
-    energy_group: TrackGroupId,
+    no_bass_or_high_group: TrackGroupId,
+    no_beach_sfx_group: TrackGroupId,
+    beach_sfx_group: TrackGroupId,
     hud_text: String,
     prompt_text: String,
 }
@@ -49,9 +49,9 @@ impl Default for TrackGroupsDemoState {
             session_id: None,
             graph_id: MusicGraphId::new(),
             loop_node: MusicNodeId::new(),
-            day_group: TrackGroupId::new(),
-            night_group: TrackGroupId::new(),
-            energy_group: TrackGroupId::new(),
+            no_bass_or_high_group: TrackGroupId::new(),
+            no_beach_sfx_group: TrackGroupId::new(),
+            beach_sfx_group: TrackGroupId::new(),
             hud_text: String::new(),
             prompt_text: String::new(),
         }
@@ -78,24 +78,24 @@ fn setup_scene(
         .find(|music_node| music_node.name == "shared_loop")
         .map(|music_node| music_node.id)
         .expect("track groups graph should contain shared_loop node");
-    state.day_group = graph
+    state.no_bass_or_high_group = graph
         .groups
         .iter()
-        .find(|group| group.name == "day_style")
+        .find(|group| group.name == "no_bass_or_high")
         .map(|group| group.id)
-        .expect("track groups graph should contain day_style group");
-    state.night_group = graph
+        .expect("track groups graph should contain no_bass_or_high group");
+    state.no_beach_sfx_group = graph
         .groups
         .iter()
-        .find(|group| group.name == "night_style")
+        .find(|group| group.name == "no_beach_sfx")
         .map(|group| group.id)
-        .expect("track groups graph should contain night_style group");
-    state.energy_group = graph
+        .expect("track groups graph should contain no_beach_sfx group");
+    state.beach_sfx_group = graph
         .groups
         .iter()
-        .find(|group| group.name == "energy_layer")
+        .find(|group| group.name == "beach_sfx")
         .map(|group| group.id)
-        .expect("track groups graph should contain energy_layer group");
+        .expect("track groups graph should contain beach_sfx group");
 
     audio
         .load_compiled_bank(package)
@@ -174,11 +174,11 @@ fn apply_default_mix(audio: &mut SonaraAudio, state: &TrackGroupsDemoState) {
     };
 
     audio
-        .set_music_track_group_active(session_id, state.day_group, true)
-        .expect("day group should become the active exclusive style");
+        .set_music_track_group_active(session_id, state.no_beach_sfx_group, true)
+        .expect("no_beach_sfx group should become the active exclusive style");
     audio
-        .set_music_track_group_active(session_id, state.energy_group, false)
-        .expect("energy layer should start muted");
+        .set_music_track_group_active(session_id, state.beach_sfx_group, false)
+        .expect("beach_sfx layer should start muted");
 }
 
 fn handle_demo_input(
@@ -192,24 +192,24 @@ fn handle_demo_input(
 
     if keyboard.just_pressed(KeyCode::Digit1) {
         audio
-            .set_music_track_group_active(session_id, state.day_group, true)
-            .expect("day group should become active");
+            .set_music_track_group_active(session_id, state.no_bass_or_high_group, true)
+            .expect("no_bass_or_high group should become active");
     }
 
     if keyboard.just_pressed(KeyCode::Digit2) {
         audio
-            .set_music_track_group_active(session_id, state.night_group, true)
-            .expect("night group should become active");
+            .set_music_track_group_active(session_id, state.no_beach_sfx_group, true)
+            .expect("no_beach_sfx group should become active");
     }
 
     if keyboard.just_pressed(KeyCode::Space) {
         let currently_active = audio
-            .music_track_group_state(session_id, state.energy_group)
-            .expect("energy group state should resolve")
+            .music_track_group_state(session_id, state.beach_sfx_group)
+            .expect("beach_sfx group state should resolve")
             .active;
         audio
-            .set_music_track_group_active(session_id, state.energy_group, !currently_active)
-            .expect("energy group should toggle");
+            .set_music_track_group_active(session_id, state.beach_sfx_group, !currently_active)
+            .expect("beach_sfx group should toggle");
     }
 
     if keyboard.just_pressed(KeyCode::KeyR) {
@@ -256,17 +256,17 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
         .expect("music status should resolve for track groups demo");
     let pending_media = audio.music_session_pending_media(session_id);
     let playhead_seconds = audio.music_session_playhead_seconds(session_id);
-    let day_active = audio
-        .music_track_group_state(session_id, state.day_group)
-        .expect("day group state should resolve")
+    let no_bass_or_high_active = audio
+        .music_track_group_state(session_id, state.no_bass_or_high_group)
+        .expect("no_bass_or_high group state should resolve")
         .active;
-    let night_active = audio
-        .music_track_group_state(session_id, state.night_group)
-        .expect("night group state should resolve")
+    let no_beach_sfx_active = audio
+        .music_track_group_state(session_id, state.no_beach_sfx_group)
+        .expect("no_beach_sfx group state should resolve")
         .active;
-    let energy_active = audio
-        .music_track_group_state(session_id, state.energy_group)
-        .expect("energy group state should resolve")
+    let beach_sfx_active = audio
+        .music_track_group_state(session_id, state.beach_sfx_group)
+        .expect("beach_sfx group state should resolve")
         .active;
 
     let phase_hint = match status.phase {
@@ -278,13 +278,13 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
     };
 
     state.prompt_text = if pending_media {
-        "Loading loop variants...\n1 = Day style, 2 = Night style, Space = toggle Energy layer, R = restart".into()
+        "Loading loop variants...\nSource: COVE OF SAND & SNOW from JRPG Moods by Voltz Supreme\n1 = No Bass or High, 2 = No Beach SFX, Space = toggle Beach SFX layer, R = restart".into()
     } else {
-        "1 = Day style, 2 = Night style, Space = toggle Energy layer\nGroup changes should preserve the current shared playhead\nR = restart the demo from the beginning".into()
+        "Source: COVE OF SAND & SNOW from JRPG Moods by Voltz Supreme\n1 = No Bass or High, 2 = No Beach SFX, Space = toggle Beach SFX layer\nGroup changes should preserve the current shared playhead\nR = restart the demo from the beginning".into()
     };
 
     state.hud_text = format!(
-        "Sonara music_track_groups\n\nNode: shared_loop -> shared_loop [OnComplete]\nTracks: day_main, night_main, energy_layer\nGroups: day_style (Exclusive), night_style (Exclusive), energy_layer (Additive)\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nday_style: {}\nnight_style: {}\nenergy_layer: {}\nloading_media: {}\nshared_playhead_seconds: {}",
+        "Sonara music_track_groups\n\nUsing: COVE OF SAND & SNOW\nPack: JRPG Moods\nCreator: Voltz Supreme\nSource: https://voltzsupreme.itch.io/jrpg-moods\n\nNode: shared_loop -> shared_loop [OnComplete]\nTracks: no_bass_or_high, no_beach_sfx, beach_sfx\nGroups: no_bass_or_high (Exclusive), no_beach_sfx (Exclusive), beach_sfx (Additive)\n\nactive_node: {}\ndesired_target_node: {}\nphase: {:?}\nhint: {}\nno_bass_or_high: {}\nno_beach_sfx: {}\nbeach_sfx: {}\nloading_media: {}\nshared_playhead_seconds: {}",
         if status.active_node == state.loop_node {
             "shared_loop"
         } else {
@@ -297,9 +297,9 @@ fn refresh_ui_text(audio: &SonaraAudio, state: &mut TrackGroupsDemoState) {
         },
         status.phase,
         phase_hint,
-        if day_active { "on" } else { "off" },
-        if night_active { "on" } else { "off" },
-        if energy_active { "on" } else { "off" },
+        if no_bass_or_high_active { "on" } else { "off" },
+        if no_beach_sfx_active { "on" } else { "off" },
+        if beach_sfx_active { "on" } else { "off" },
         if pending_media { "yes" } else { "no" },
         playhead_seconds
             .map(|seconds| format!("{seconds:.2}"))

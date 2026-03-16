@@ -21,8 +21,8 @@
       "assets": [
         {
           "id": "019e0000-0000-7000-8000-000000000301",
-          "name": "warmup_day_variant",
-          "source_path": "private_assets/warmup_day_variant.wav",
+          "name": "no_bass_or_high",
+          "source_path": "private_assets/music_track_groups_assets/02 - Cove of sand and Snow - No Bass or High.wav",
           "import_settings": {
             "normalize": false,
             "target_sample_rate": null
@@ -31,8 +31,8 @@
         },
         {
           "id": "019e0000-0000-7000-8000-000000000302",
-          "name": "warmup_night_variant",
-          "source_path": "private_assets/warmup_night_variant.wav",
+          "name": "no_beach_sfx",
+          "source_path": "private_assets/music_track_groups_assets/02 - Cove of sand and Snow - No Beach SFX.wav",
           "import_settings": {
             "normalize": false,
             "target_sample_rate": null
@@ -41,8 +41,8 @@
         },
         {
           "id": "019e0000-0000-7000-8000-000000000303",
-          "name": "warmup_energy_layer",
-          "source_path": "private_assets/warmup_energy_layer.wav",
+          "name": "beach_sfx",
+          "source_path": "private_assets/music_track_groups_assets/02 - Cove of sand and Snow - C - Beach SFX.wav",
           "import_settings": {
             "normalize": false,
             "target_sample_rate": null
@@ -64,7 +64,7 @@
   "clips": [
     {
       "id": "019e0000-0000-7000-8000-000000000101",
-      "name": "warmup_day_variant",
+      "name": "no_bass_or_high",
       "asset_id": "019e0000-0000-7000-8000-000000000301",
       "source_range": null,
       "loop_range": null,
@@ -73,7 +73,7 @@
     },
     {
       "id": "019e0000-0000-7000-8000-000000000102",
-      "name": "warmup_night_variant",
+      "name": "no_beach_sfx",
       "asset_id": "019e0000-0000-7000-8000-000000000302",
       "source_range": null,
       "loop_range": null,
@@ -82,7 +82,7 @@
     },
     {
       "id": "019e0000-0000-7000-8000-000000000103",
-      "name": "warmup_energy_layer",
+      "name": "beach_sfx",
       "asset_id": "019e0000-0000-7000-8000-000000000303",
       "source_range": null,
       "loop_range": null,
@@ -100,19 +100,19 @@
       "tracks": [
         {
           "id": "019e0000-0000-7000-8000-000000000601",
-          "name": "day_main",
+          "name": "no_bass_or_high",
           "role": "Main",
           "group": "019e0000-0000-7000-8000-000000000701"
         },
         {
           "id": "019e0000-0000-7000-8000-000000000602",
-          "name": "night_main",
+          "name": "no_beach_sfx",
           "role": "Main",
           "group": "019e0000-0000-7000-8000-000000000702"
         },
         {
           "id": "019e0000-0000-7000-8000-000000000603",
-          "name": "energy_layer",
+          "name": "beach_sfx",
           "role": "Layer",
           "group": "019e0000-0000-7000-8000-000000000703"
         }
@@ -120,17 +120,17 @@
       "groups": [
         {
           "id": "019e0000-0000-7000-8000-000000000701",
-          "name": "day_style",
+          "name": "no_bass_or_high",
           "mode": "Exclusive"
         },
         {
           "id": "019e0000-0000-7000-8000-000000000702",
-          "name": "night_style",
+          "name": "no_beach_sfx",
           "mode": "Exclusive"
         },
         {
           "id": "019e0000-0000-7000-8000-000000000703",
-          "name": "energy_layer",
+          "name": "beach_sfx",
           "mode": "Additive"
         }
       ],
