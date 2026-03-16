@@ -466,8 +466,11 @@ play(new_event)
   - runtime `MusicSession` 已持有显式 `TrackGroupState`
   - runtime / bevy / firewheel 已有最小 group 开关查询入口
   - 主轨 / stinger 解析已经开始按 group 状态过滤
+  - `firewheel` 已开始按“当前节点所有激活 track”同步启动播放
+    - transition 节点上的 stinger 已并入节点多轨主线
+    - 不再通过独立 stinger worker 特判触发
   - 仍未完成：
-    - 节点内多轨同时发声
+    - 组切换驱动的节点内多轨控制
     - 组级 automation
     - 共享播放头驱动的真正 `[3]` 变体切换
 
