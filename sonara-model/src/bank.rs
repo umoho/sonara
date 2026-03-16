@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;

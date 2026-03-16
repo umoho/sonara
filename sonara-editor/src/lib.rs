@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Sonara 编辑器最小壳子。
 //!
 //! 当前阶段只打通 authoring 项目读取和 compiled bank 导出流程。

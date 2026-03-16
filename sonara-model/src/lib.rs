@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Sonara 的核心数据模型
 //!
 //! 这一层只定义语义对象和序列化结构

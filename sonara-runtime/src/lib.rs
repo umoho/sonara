@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Sonara 的高层运行时接口
 
 use std::collections::HashMap;

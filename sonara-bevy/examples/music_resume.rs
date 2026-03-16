@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use bevy::prelude::*;
 use sonara_bevy::prelude::{SonaraAudio, SonaraFirewheelPlugin};
 use sonara_build::CompiledBankPackage;

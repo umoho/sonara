@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Bevy 集成层骨架
 
 use bevy_app::{App, Plugin, Update};

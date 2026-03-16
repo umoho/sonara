@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Sonara 的构建层
 //!
 //! 这一层负责 authoring 数据校验和 bank 构建
