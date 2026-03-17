@@ -12,6 +12,7 @@
 - 让 `Snapshot` 真正驱动 live bus gain
 - 为 `Effect` 建立以 `Bus` 为归属的链式结构
 - 为 `Automation` 建立统一的参数时间变化抽象
+- 用一个可感知的应用场景验证这条主线, 当前选定的场景是 `[4]` `Underwater`
 
 当前非目标：
 
@@ -20,6 +21,7 @@
 - 不把 `fade` 重新设计成 `Track` 的静态属性
 - 不先做 per-instance effect chain
 - 不一次性做完整 timeline 级 automation authoring 系统
+- 在统一 automation 方向未明确前, 不为了过渡引入临时性的最小 fade 特判
 
 ## 2. 当前基线
 
@@ -392,42 +394,109 @@ backend 不负责理解高层业务语义，例如：
 - music 采用最小 bus 接线方案
 - 不急着先接 effect
 
-### 第二阶段：snapshot -> live bus gain
+### 第二阶段：`[4]` `Underwater` 场景驱动的 bus effect foundation
 
 目标：
 
-- 让 snapshot 真正驱动 live bus gain
+- 选择一个用户可感知、能真实约束系统形态的新 example
+- 当前选定 `[4]` `Underwater` 作为 `Bus + Effect + Automation` 的主验证场景
+- 先让 bus effect chain 成为真实可接入的执行层结构
 
-第一版允许：
+要求：
 
-- 先直接把目标 gain 作用到 bus
-- fade 只做最小实现
+- 不为了“先有 fade”而添加临时执行逻辑
+- 优先解决 bus 上挂 effect、live worker 持续受影响的问题
+- 让新 example 能清楚展示“已经在播的声音进入/离开水下后听感改变”
 
-### 第三阶段：bus effect foundation
+### 第三阶段：`[4]` 驱动的 automation foundation
 
 目标：
 
-- effect 先挂在 bus 上
-- 不急着做 per-instance effect chain
+- 让 bus gain / effect param 的时间变化收敛到统一 automation 方向
+- 先服务 `[4]` 的进入/离开水下过程
 
 重点：
 
-- 建立 bus 和 effect chain 的关系
-- 不要求一次做很多效果器品类
+- 不新增独立的“最小 fade”特判
+- 先把真正需要变化的参数纳入 automation target
+- 第一阶段优先让 `BusGain` 和 `BusEffectParam` 可执行
 
-### 第四阶段：automation foundation
+### 第四阶段：snapshot 与更高层场景控制
 
 目标：
 
-- 把 bus gain / snapshot fade / effect param 变化收敛到统一方向
+- 在 `Bus + Effect + Automation` 已有真实落点后，再回到 snapshot
+- 让 snapshot 成为更高层的混音场景 authoring 对象，而不是先做成临时控制逻辑
 
-这次不要求：
+要求：
 
-- 一次做完整 automation 系统
+- snapshot 不再独立生长一套 fade 机制
+- snapshot 最终应翻译成 `BusGain(...)` / `BusEffectParam(...)` automation
 
-但要求避免继续新增大量彼此无关的 fade 特判。
+## 10. 功能 `[4]`：环境混音状态切换（Underwater）
 
-## 10. 对象清单与最小字段草案
+### 10.1 定义
+
+`[4]` 不是切歌，也不是切到另一条独立 clip。
+
+`[4]` 的目标是：
+
+- 当玩家进入/离开水下时
+- 让已经在播的 `event` / `music`
+- 通过 `Bus + Effect + Automation`
+- 改变整体听感
+
+也就是说，`[4]` 是一个“环境混音状态切换”能力，而不是播放内容切换能力。
+
+### 10.2 它要验证什么
+
+`[4]` 用来验证这条主线里最关键的三件事：
+
+- 已在播声音必须持续受 bus 控制
+- bus 上挂载的 effect 必须能真实改变听感
+- 参数变化必须有统一的 automation 去承接
+
+如果 `[4]` 成立，就说明：
+
+- `Bus` 不再只是起播时读取一次的参数表
+- `Effect` 已经有真实归属和执行落点
+- `Automation` 不是抽象名词，而是能驱动实际听感变化的执行层
+
+### 10.3 `[4]` 的推荐第一版表现
+
+第一版 `Underwater` example 推荐优先展示：
+
+- `World` / `SFX` / `Music` bus 在入水后听感变闷
+- `UI` bus 相对保持清晰
+- 已在播内容不重启，只改变混音结果
+
+推荐的参数变化方向可以是：
+
+- `Music Bus gain` 略微降低
+- `World` 或 `SFX` bus 上的 `LowPass` cutoff 降低
+- 离开水下时再恢复到常态
+
+### 10.4 `[4]` 当前不要求什么
+
+`[4]` 当前不要求：
+
+- 修复 `[3]` `music_track_groups` 的播放 bug
+- 引入 per-instance effect chain
+- 做复杂 snapshot 叠层系统
+- 为了过渡而新增最小 fade 特判
+
+### 10.5 `[4]` 与 Snapshot 的关系
+
+在当前阶段，`[4]` 不要求先经过 `Snapshot`。
+
+更合理的顺序是：
+
+- 先让 `Bus + Effect + Automation` 本身有真实落点
+- 再决定是否把“水下状态”进一步抽象成一个 snapshot 或其他高层 authoring 对象
+
+也就是说，`[4]` 当前是主验证场景，不是要求先把 snapshot 做完才能继续。
+
+## 11. 对象清单与最小字段草案
 
 本节不是最终公开 API，只是当前阶段指导实现的最小数据骨架。
 
@@ -437,7 +506,7 @@ backend 不负责理解高层业务语义，例如：
 - 实现时可以先做兼容或渐进迁移
 - 不要求文档字段名与第一次提交的代码命名完全一致
 
-### 10.1 模型层对象
+### 11.1 模型层对象
 
 #### Bus
 
@@ -598,7 +667,7 @@ AutomationSegment
 - 第一阶段先按“单段、单目标、单标量参数”实现
 - 更复杂的控制点系统属于后续 authoring 表达增强
 
-### 10.2 Runtime 层对象
+### 11.2 Runtime 层对象
 
 #### LiveBusState
 
@@ -636,7 +705,7 @@ ActiveAutomation
 - 第一阶段同一 target 上后来的 automation 直接覆盖前面的 automation
 - runtime 负责创建和替换这些对象
 
-### 10.3 Backend 层对象
+### 11.3 Backend 层对象
 
 #### WorkerBusBinding
 
@@ -679,7 +748,7 @@ LiveBusEffectState
 - 第一阶段只要求这层 foundation 存在
 - 是否第一次就接入完整 DSP chain，可以按实现进度决定
 
-## 11. 当前记录下来的决定
+## 12. 当前记录下来的决定
 
 截至本文档编写时，已明确的结论包括：
 
@@ -691,13 +760,15 @@ LiveBusEffectState
 - `Effect` 在模型层使用数据定义，不以 trait 作为公开模型中心
 - `Automation` 是统一的参数时间变化抽象
 - `Snapshot` 是 `Automation` 的高层来源之一
+- `[4]` `Underwater` 被选为下一阶段的主验证场景
+- 在统一 automation 方向明确前, 不为 snapshot 或其他场景引入临时性的最小 fade 特判
 - 当前实施顺序固定为：
   - `live bus gain`
-  - `snapshot -> live bus gain`
-  - `bus effect foundation`
-  - `automation foundation`
+  - `[4]` `Underwater` 场景驱动的 `bus effect foundation`
+  - `[4]` 驱动的 `automation foundation`
+  - `snapshot` 回到高层场景控制
 
-## 12. 待下一次继续细化的问题
+## 13. 待下一次继续细化的问题
 
 本文档暂不展开以下细节，后续实现前需要继续细化：
 
@@ -705,3 +776,4 @@ LiveBusEffectState
 - effect 参数类型系统如何定义
 - runtime 中 live bus state 的精确数据结构
 - backend 如何组织 bus effect chain 与 live worker 的连接方式
+- `[4]` example 中具体使用哪些 bus 和哪些 effect 参数
