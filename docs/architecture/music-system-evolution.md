@@ -474,7 +474,14 @@ play(new_event)
     - 单节点 `shared_loop`
     - 两个互斥风格组 `day_style / night_style`
     - 一个叠加层组 `energy_layer`
-    - 当前 backend 会在 group 切换时沿用当前主导 track 的播放头秒数重启整组轨，作为共享播放头的第一版实现
+    - backend 现在会在 group 切换时：
+      - 沿用当前主导 track 的播放头秒数
+      - 保留未变化轨
+      - 只加入新增轨
+      - 只退出被移除轨
+    - 最小 `group fade` 已开始落地：
+      - 组打开时淡入新增轨
+      - 组关闭时淡出移除轨
   - 仍未完成：
     - 更平滑的组切换执行
     - 组级 automation
@@ -1350,6 +1357,14 @@ Stopped
   - 以节点 `primary_track` 的播放位置作为节点级共享播放头
 - `TrackGroup` 激活状态
   - 第一版已经进入 session 运行时状态，并可由 API 显式开关
+- 当前最近的执行质量目标：
+  - 先把 `TrackGroup` 切换做成 **差量更新**
+    - 保留未变化轨
+    - 只加入新增轨
+    - 只退出被移除轨
+  - 再补最小 `group fade`
+    - 组打开时淡入
+    - 组关闭时淡出
 - 组级静音 / 权重 / 自动化执行
 - `SyncCursor`
   - 只有在切到另一组独立内容时，才需要把共享播放头映射到目标变体
