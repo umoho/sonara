@@ -8,6 +8,7 @@
 pub mod asset;
 pub mod bank;
 pub mod bus;
+pub mod effect;
 pub mod event;
 pub mod ids;
 pub mod music;
@@ -19,13 +20,16 @@ pub mod transport;
 pub use asset::{AnalysisMetadata, AudioAsset, ImportSettings, LoopRegion, StreamingMode};
 pub use bank::{Bank, BankAsset, BankDefinition, BankManifest, BankObjects};
 pub use bus::Bus;
+pub use effect::{
+    BusEffect, BusEffectSlot, LOW_PASS_MAX_CUTOFF_HZ, LOW_PASS_MIN_CUTOFF_HZ, LowPassEffect,
+};
 pub use event::{
     Event, EventContentNode, EventContentRoot, EventKind, LeafNode, LoopNode, NodeId, NodeRef,
     RandomNode, SamplerNode, SequenceNode, SpatialMode, SwitchCase, SwitchNode,
 };
 pub use ids::{
-    BankId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicNodeId, ParameterId, ResumeSlotId,
-    SnapshotId, SyncDomainId, TrackGroupId, TrackId,
+    BankId, BusEffectSlotId, BusId, ClipId, CueId, EventId, MusicGraphId, MusicNodeId, ParameterId,
+    ResumeSlotId, SnapshotId, SyncDomainId, TrackGroupId, TrackId,
 };
 pub use music::{
     EdgeTrigger, EntryPolicy, MemoryPolicy, MusicEdge, MusicGraph, MusicNode, PlaybackTarget,

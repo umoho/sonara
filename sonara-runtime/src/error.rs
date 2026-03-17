@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use sonara_model::{
-    BankId, BusId, EventId, MusicGraphId, MusicNodeId, NodeId, ParameterId, SnapshotId,
-    TrackGroupId,
+    BankId, BusEffectSlotId, BusId, EventId, MusicGraphId, MusicNodeId, NodeId, ParameterId,
+    SnapshotId, TrackGroupId,
 };
 use thiserror::Error;
 
@@ -34,6 +34,11 @@ pub enum RuntimeError {
     SnapshotTargetBusNotFound(BusId),
     #[error("bus `{0:?}` 不存在")]
     BusNotLoaded(BusId),
+    #[error("bus `{bus_id:?}` 上不存在 effect slot `{slot_id:?}`")]
+    BusEffectSlotNotFound {
+        bus_id: BusId,
+        slot_id: BusEffectSlotId,
+    },
     #[error("music graph `{0:?}` is not loaded")]
     MusicGraphNotLoaded(MusicGraphId),
     #[error("music graph `{0:?}` has no nodes")]

@@ -27,6 +27,7 @@ macro_rules! define_id {
 }
 
 define_id!(BankId);
+define_id!(BusEffectSlotId);
 define_id!(BusId);
 define_id!(ClipId);
 define_id!(CueId);

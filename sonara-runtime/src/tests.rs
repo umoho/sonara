@@ -1,10 +1,11 @@
 use smol_str::SmolStr;
 use sonara_model::{
-    Bank, Bus, BusId, Clip, CuePoint, EdgeTrigger, EntryPolicy, Event, EventContentNode,
-    EventContentRoot, EventId, EventKind, MemoryPolicy, MusicEdge, MusicGraph, MusicNode,
-    MusicNodeId, NodeId, NodeRef, ParameterId, ParameterValue, PlaybackTarget, ResumeSlot,
-    SamplerNode, SequenceNode, Snapshot, SnapshotId, SnapshotTarget, SpatialMode, SwitchCase,
-    SwitchNode, SyncDomain, TimeRange, Track, TrackBinding, TrackGroup, TrackGroupMode, TrackRole,
+    Bank, Bus, BusEffectSlot, BusId, Clip, CuePoint, EdgeTrigger, EntryPolicy, Event,
+    EventContentNode, EventContentRoot, EventId, EventKind, MemoryPolicy, MusicEdge, MusicGraph,
+    MusicNode, MusicNodeId, NodeId, NodeRef, ParameterId, ParameterValue, PlaybackTarget,
+    ResumeSlot, SamplerNode, SequenceNode, Snapshot, SnapshotId, SnapshotTarget, SpatialMode,
+    SwitchCase, SwitchNode, SyncDomain, TimeRange, Track, TrackBinding, TrackGroup, TrackGroupMode,
+    TrackRole,
 };
 use uuid::Uuid;
 
@@ -1762,6 +1763,56 @@ fn set_bus_gain_updates_existing_event_bus_lookup() {
 
     assert_eq!(runtime.bus_gain(bus_id), Some(0.35));
     assert_eq!(runtime.active_bus_gain(instance_id), Some(0.35));
+}
+
+#[test]
+fn set_bus_effect_slot_updates_loaded_live_slot_state() {
+    let mut bus = Bus::new("sfx");
+    let mut original_slot = BusEffectSlot::low_pass(1_200.0);
+    original_slot
+        .low_pass_effect_mut()
+        .expect("slot should be low-pass")
+        .enabled = false;
+    let slot_id = original_slot.id;
+    bus.effect_slots.push(original_slot.clone());
+
+    let mut bank = Bank::new("core");
+    bank.objects.buses.push(bus.id);
+
+    let mut runtime = SonaraRuntime::new();
+    runtime
+        .load_bank_with_definitions(
+            bank,
+            Vec::new(),
+            vec![bus.clone()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("bank should load");
+
+    let mut updated_slot = original_slot.clone();
+    let low_pass = updated_slot
+        .low_pass_effect_mut()
+        .expect("slot should be low-pass");
+    low_pass.enabled = true;
+    low_pass.set_cutoff_hz(480.0);
+
+    runtime
+        .set_bus_effect_slot(bus.id, updated_slot.clone())
+        .expect("bus effect slot should update");
+
+    let live_slots = runtime
+        .bus_effect_slots(bus.id)
+        .expect("live effect slots should exist");
+    let live_slot = live_slots
+        .iter()
+        .find(|slot| slot.id == slot_id)
+        .expect("updated slot should be present");
+
+    assert_eq!(live_slot, &updated_slot);
 }
 
 #[test]

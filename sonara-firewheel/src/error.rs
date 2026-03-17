@@ -2,7 +2,7 @@
 
 use firewheel_pool::NewWorkerError;
 use sonara_build::BuildError;
-use sonara_model::ClipId;
+use sonara_model::{BusId, ClipId};
 use sonara_runtime::RuntimeError;
 use thiserror::Error;
 use uuid::Uuid;
@@ -38,4 +38,12 @@ pub enum FirewheelBackendError {
     InvalidClipRange(ClipId),
     #[error("clip `{0:?}` 的子区间循环暂未接入 Firewheel sampler")]
     UnsupportedClipLoopRange(ClipId),
+    #[error(
+        "bus `{bus_id:?}` 的 effect slot 数量超出当前 backend 支持上限: {slot_count} > {max_supported}"
+    )]
+    UnsupportedBusEffectSlotCount {
+        bus_id: BusId,
+        slot_count: usize,
+        max_supported: usize,
+    },
 }

@@ -9,8 +9,8 @@ use firewheel::{
     FirewheelConfig, FirewheelContext, collector::ArcGc, cpal::CpalConfig,
     nodes::sampler::SamplerNode, sample_resource::SampleResource,
 };
-use firewheel_pool::{SamplerPoolVolumePan, WorkerID};
-use sonara_model::{BankAsset, BusId, ClipId, ParameterId, ParameterValue, TrackId};
+use firewheel_pool::WorkerID;
+use sonara_model::{BankAsset, BusEffectSlot, BusId, ClipId, ParameterId, ParameterValue, TrackId};
 use sonara_runtime::{
     EmitterId, EventInstanceId, EventInstanceState, Fade, MusicSessionId, PlaybackPlan,
     RuntimeCommandBuffer, RuntimeRequest, SonaraRuntime,
@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     error::FirewheelBackendError,
+    fx::SamplerPoolSonaraFx,
     types::{
         FirewheelRequest, FirewheelRequestOutcome, FirewheelRequestResult, PendingExitCue,
         PendingMusicPlayback, PendingNodeCompletion, StreamingAssetLoadResult,
@@ -29,7 +30,7 @@ use crate::{
 pub struct FirewheelBackend {
     pub(crate) runtime: SonaraRuntime,
     pub(crate) context: FirewheelContext,
-    pub(crate) sampler_pool: SamplerPoolVolumePan,
+    pub(crate) sampler_pool: SamplerPoolSonaraFx,
     pub(crate) known_bank_assets: HashMap<Uuid, BankAsset>,
     pub(crate) loading_streaming_assets: HashSet<Uuid>,
     pub(crate) pending_playbacks: HashMap<EventInstanceId, PlaybackPlan>,
@@ -61,7 +62,7 @@ impl FirewheelBackend {
             .start_stream(CpalConfig::default())
             .map_err(|error| FirewheelBackendError::StartStream(error.to_string()))?;
 
-        let sampler_pool = SamplerPoolVolumePan::new(
+        let sampler_pool = SamplerPoolSonaraFx::new(
             32,
             SamplerNode::default(),
             None,
@@ -126,6 +127,18 @@ impl FirewheelBackend {
     pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), FirewheelBackendError> {
         self.runtime.set_bus_gain(bus_id, gain)?;
         let _ = self.sync_live_bus_gains();
+        self.update()?;
+        Ok(())
+    }
+
+    /// 替换某个 bus 上的一个 effect slot。
+    pub fn set_bus_effect_slot(
+        &mut self,
+        bus_id: BusId,
+        slot: BusEffectSlot,
+    ) -> Result<(), FirewheelBackendError> {
+        self.runtime.set_bus_effect_slot(bus_id, slot)?;
+        let _ = self.sync_live_bus_effects();
         self.update()?;
         Ok(())
     }
@@ -203,7 +216,9 @@ impl FirewheelBackend {
         self.start_ready_pending_playbacks()?;
         self.start_ready_pending_music_playbacks()?;
         self.refresh_waiting_exit_cues()?;
-        if self.sync_live_bus_gains() {
+        let bus_gains_changed = self.sync_live_bus_gains();
+        let bus_effects_changed = self.sync_live_bus_effects();
+        if bus_gains_changed || bus_effects_changed {
             self.context
                 .update()
                 .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;

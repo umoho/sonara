@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use sonara_model::{BusId, Snapshot, SnapshotId, TrackId};
+use sonara_model::{BusEffectSlot, BusId, Snapshot, SnapshotId, TrackId};
 
 use crate::bank::SonaraRuntime;
 use crate::error::RuntimeError;
@@ -33,6 +33,32 @@ impl SonaraRuntime {
     /// 读取当前某个 bus 的目标音量。
     pub fn bus_volume(&self, bus_id: BusId) -> Option<f32> {
         self.bus_gain(bus_id)
+    }
+
+    /// 读取某个 bus 当前的 live effect slot 列表。
+    pub fn bus_effect_slots(&self, bus_id: BusId) -> Option<&[BusEffectSlot]> {
+        self.bus_effect_slots.get(&bus_id).map(Vec::as_slice)
+    }
+
+    /// 替换某个 bus 上的一个 live effect slot。
+    pub fn set_bus_effect_slot(
+        &mut self,
+        bus_id: BusId,
+        slot: BusEffectSlot,
+    ) -> Result<(), RuntimeError> {
+        let slots = self
+            .bus_effect_slots
+            .get_mut(&bus_id)
+            .ok_or(RuntimeError::BusNotLoaded(bus_id))?;
+        let existing = slots
+            .iter_mut()
+            .find(|candidate| candidate.id == slot.id)
+            .ok_or(RuntimeError::BusEffectSlotNotFound {
+                bus_id,
+                slot_id: slot.id,
+            })?;
+        *existing = slot;
+        Ok(())
     }
 
     /// 读取某个事件实例当前命中的默认 bus。

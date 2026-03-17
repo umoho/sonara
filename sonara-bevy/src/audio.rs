@@ -4,8 +4,9 @@ use bevy_ecs::prelude::NonSendMut;
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::FirewheelBackend;
 use sonara_model::{
-    Bank, BankId, Bus, BusId, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId,
-    ParameterId, ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
+    Bank, BankId, Bus, BusEffectSlot, BusId, Clip, Event, EventId, MusicGraph, MusicGraphId,
+    MusicNodeId, ParameterId, ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain,
+    TrackGroupId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, EventInstanceState, Fade, MusicSessionId,
@@ -261,6 +262,20 @@ impl SonaraAudio {
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => runtime.set_bus_gain(bus_id, gain)?,
             SonaraBackend::Firewheel(backend) => backend.set_bus_gain(bus_id, gain)?,
+        }
+
+        Ok(())
+    }
+
+    /// 替换某个 bus 上的一个 effect slot。
+    pub fn set_bus_effect_slot(
+        &mut self,
+        bus_id: BusId,
+        slot: BusEffectSlot,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.set_bus_effect_slot(bus_id, slot)?,
+            SonaraBackend::Firewheel(backend) => backend.set_bus_effect_slot(bus_id, slot)?,
         }
 
         Ok(())

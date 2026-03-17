@@ -15,4 +15,5 @@ thiserror.workspace = true
 
 [dev-dependencies]
 bevy = "0.18.1"
+camino.workspace = true
 uuid.workspace = true

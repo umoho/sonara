@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::ids::BusId;
+use crate::{BusEffectSlot, ids::BusId};
 
 /// 混音层级中的 bus 定义
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -12,6 +12,8 @@ pub struct Bus {
     pub name: SmolStr,
     pub parent: Option<BusId>,
     pub default_volume: f32,
+    #[serde(default)]
+    pub effect_slots: Vec<BusEffectSlot>,
 }
 
 impl Bus {
@@ -22,6 +24,7 @@ impl Bus {
             name: name.into(),
             parent: None,
             default_volume: 1.0,
+            effect_slots: Vec::new(),
         }
     }
 }

@@ -198,6 +198,7 @@ impl FirewheelBackend {
         sampler.start_from(PlayFrom::Seconds(validate_playback_position_seconds(
             start_from_seconds,
         )?));
+        let low_pass = self.bus_low_pass_node(bus_id);
 
         let worker = self.sampler_pool.new_worker(
             &sampler,
@@ -209,8 +210,13 @@ impl FirewheelBackend {
                 params.set_volume_linear(bus_volume);
                 fx_chain
                     .fx_chain
-                    .set_params(params, None, &fx_chain.node_ids, cx);
+                    .set_volume_pan_params(params, None, &fx_chain.node_ids, cx);
                 fx_chain.fx_chain.volume_pan = params;
+
+                fx_chain
+                    .fx_chain
+                    .set_low_pass_params(low_pass, None, &fx_chain.node_ids, cx);
+                fx_chain.fx_chain.low_pass = low_pass;
             },
         )?;
         if let Some(old_worker_id) = worker.old_worker_id {
@@ -246,6 +252,7 @@ impl FirewheelBackend {
         } else {
             sampler.start_or_restart();
         }
+        let low_pass = self.bus_low_pass_node(bus_id);
 
         let worker = self.sampler_pool.new_worker(
             &sampler,
@@ -257,8 +264,13 @@ impl FirewheelBackend {
                 params.set_volume_linear(bus_volume);
                 fx_chain
                     .fx_chain
-                    .set_params(params, None, &fx_chain.node_ids, cx);
+                    .set_volume_pan_params(params, None, &fx_chain.node_ids, cx);
                 fx_chain.fx_chain.volume_pan = params;
+
+                fx_chain
+                    .fx_chain
+                    .set_low_pass_params(low_pass, None, &fx_chain.node_ids, cx);
+                fx_chain.fx_chain.low_pass = low_pass;
             },
         )?;
         self.attach_worker(instance_id, worker.worker_id);

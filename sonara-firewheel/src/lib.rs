@@ -6,6 +6,7 @@ mod assets;
 mod backend;
 mod error;
 mod events;
+mod fx;
 mod music;
 mod types;
 mod workers;

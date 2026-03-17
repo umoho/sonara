@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use sonara_model::{
-    Bank, BankId, BankObjects, Bus, BusId, Clip, ClipId, Event, EventId, MusicGraph, MusicGraphId,
-    ParameterId, ParameterValue, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId, SyncDomain,
-    SyncDomainId,
+    Bank, BankId, BankObjects, Bus, BusEffectSlot, BusId, Clip, ClipId, Event, EventId, MusicGraph,
+    MusicGraphId, ParameterId, ParameterValue, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId,
+    SyncDomain, SyncDomainId,
 };
 
 use crate::error::RuntimeError;
@@ -26,6 +26,7 @@ pub struct SonaraRuntime {
     pub(crate) music_graphs: HashMap<MusicGraphId, MusicGraph>,
     pub(crate) snapshots: HashMap<SnapshotId, Snapshot>,
     pub(crate) bus_volumes: HashMap<BusId, f32>,
+    pub(crate) bus_effect_slots: HashMap<BusId, Vec<BusEffectSlot>>,
     pub(crate) global_parameters: HashMap<ParameterId, ParameterValue>,
     pub(crate) emitter_parameters: HashMap<EmitterId, HashMap<ParameterId, ParameterValue>>,
     pub(crate) active_instances: HashMap<EventInstanceId, ActiveEventInstance>,
@@ -80,10 +81,13 @@ impl SonaraRuntime {
         for bus in buses {
             self.buses.insert(bus.id, bus.clone());
             self.bus_volumes.entry(bus.id).or_insert(bus.default_volume);
+            self.bus_effect_slots
+                .insert(bus.id, bus.effect_slots.clone());
         }
 
         for bus_id in &bank_objects.buses {
             self.bus_volumes.entry(*bus_id).or_insert(1.0);
+            self.bus_effect_slots.entry(*bus_id).or_default();
         }
 
         for snapshot in snapshots {

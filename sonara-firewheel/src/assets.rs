@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::{
     backend::FirewheelBackend,
     error::FirewheelBackendError,
+    fx::MAX_SUPPORTED_BUS_EFFECT_SLOTS,
     types::{PendingMusicPlayback, StreamingAssetLoadResult},
 };
 
@@ -55,6 +56,16 @@ impl FirewheelBackend {
         sync_domains: Vec<SyncDomain>,
         music_graphs: Vec<MusicGraph>,
     ) -> Result<(), FirewheelBackendError> {
+        for bus in &buses {
+            if bus.effect_slots.len() > MAX_SUPPORTED_BUS_EFFECT_SLOTS {
+                return Err(FirewheelBackendError::UnsupportedBusEffectSlotCount {
+                    bus_id: bus.id,
+                    slot_count: bus.effect_slots.len(),
+                    max_supported: MAX_SUPPORTED_BUS_EFFECT_SLOTS,
+                });
+            }
+        }
+
         self.register_bank_manifest(&bank.manifest)?;
         self.runtime.load_bank_with_definitions(
             bank,

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use sonara_model::{
-    Bank, BankId, Bus, BusId, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId,
-    ParameterId, ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
+    Bank, BankId, Bus, BusEffectSlot, BusId, Clip, Event, EventId, MusicGraph, MusicGraphId,
+    MusicNodeId, ParameterId, ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain,
+    TrackGroupId,
 };
 
 use crate::bank::SonaraRuntime;
@@ -163,6 +164,15 @@ impl QueuedRuntime {
     /// 设置一个 bus gain。
     pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), RuntimeError> {
         self.runtime.set_bus_gain(bus_id, gain)
+    }
+
+    /// 替换某个 bus 上的一个 effect slot。
+    pub fn set_bus_effect_slot(
+        &mut self,
+        bus_id: BusId,
+        slot: BusEffectSlot,
+    ) -> Result<(), RuntimeError> {
+        self.runtime.set_bus_effect_slot(bus_id, slot)
     }
 
     /// 创建一个 emitter。

@@ -4,10 +4,11 @@ use std::collections::HashSet;
 
 use firewheel::{
     clock::{DurationSeconds, EventInstant},
+    nodes::fast_filters::lowpass::FastLowpassStereoNode,
     nodes::sampler::SamplerState,
 };
 use firewheel_pool::WorkerID;
-use sonara_model::{BusId, ClipId, TrackId};
+use sonara_model::{BusEffect, BusId, ClipId, LowPassEffect, TrackId};
 use sonara_runtime::{EventInstanceId, Fade, MusicPhase, MusicSessionId};
 
 use crate::{backend::FirewheelBackend, error::FirewheelBackendError, types::InstancePlayhead};
@@ -129,6 +130,43 @@ impl FirewheelBackend {
         }
 
         changed
+    }
+
+    pub(crate) fn sync_live_bus_effects(&mut self) -> bool {
+        let bindings: Vec<_> = self
+            .worker_buses
+            .iter()
+            .map(|(worker_id, bus_id)| (*worker_id, *bus_id))
+            .collect();
+        let mut changed = false;
+
+        for (worker_id, bus_id) in bindings {
+            changed |=
+                self.set_worker_low_pass(worker_id, self.bus_low_pass_node(Some(bus_id)), None);
+        }
+
+        changed
+    }
+
+    pub(crate) fn bus_low_pass_node(&self, bus_id: Option<BusId>) -> FastLowpassStereoNode {
+        let mut node = FastLowpassStereoNode {
+            enabled: false,
+            ..Default::default()
+        };
+        let Some(bus_id) = bus_id else {
+            return node;
+        };
+        let Some(effect_slots) = self.runtime.bus_effect_slots(bus_id) else {
+            return node;
+        };
+        let Some(effect) = effect_slots.iter().find_map(|slot| match &slot.effect {
+            BusEffect::LowPass(effect) => Some(*effect),
+        }) else {
+            return node;
+        };
+
+        apply_low_pass_effect(&mut node, effect);
+        node
     }
 
     pub(crate) fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
@@ -386,10 +424,37 @@ impl FirewheelBackend {
         let mut params = fx_state.fx_chain.volume_pan;
         params.smooth_seconds = target_smooth_seconds;
         params.set_volume_linear(target_volume_linear);
-        fx_state
-            .fx_chain
-            .set_params(params, start_time, &fx_state.node_ids, &mut self.context);
+        fx_state.fx_chain.set_volume_pan_params(
+            params,
+            start_time,
+            &fx_state.node_ids,
+            &mut self.context,
+        );
         fx_state.fx_chain.volume_pan = params;
+        true
+    }
+
+    pub(crate) fn set_worker_low_pass(
+        &mut self,
+        worker_id: WorkerID,
+        params: FastLowpassStereoNode,
+        start_time: Option<EventInstant>,
+    ) -> bool {
+        let Some(fx_state) = self.sampler_pool.fx_chain_mut(worker_id) else {
+            return false;
+        };
+
+        if fx_state.fx_chain.low_pass == params {
+            return false;
+        }
+
+        fx_state.fx_chain.set_low_pass_params(
+            params,
+            start_time,
+            &fx_state.node_ids,
+            &mut self.context,
+        );
+        fx_state.fx_chain.low_pass = params;
         true
     }
 
@@ -474,4 +539,9 @@ impl FirewheelBackend {
             self.context.audio_clock_corrected().seconds + DurationSeconds(delay_seconds),
         )
     }
+}
+
+fn apply_low_pass_effect(node: &mut FastLowpassStereoNode, effect: LowPassEffect) {
+    node.enabled = effect.enabled;
+    node.cutoff_hz = effect.cutoff_hz;
 }
