@@ -675,13 +675,32 @@ impl FirewheelBackend {
                 .get(&session_id)
                 .and_then(|workers_by_track| workers_by_track.get(track_id))
                 .is_some_and(|worker_ids| {
-                    worker_ids.iter().any(|worker_id| {
-                        self.sampler_pool
-                            .first_node_state::<SamplerState, _>(*worker_id, &self.context)
-                            .is_some()
-                    })
+                    worker_ids
+                        .iter()
+                        .any(|worker_id| self.music_worker_is_live(*worker_id))
                 })
         })
+    }
+
+    fn music_session_track_has_live_worker(
+        &self,
+        session_id: MusicSessionId,
+        track_id: TrackId,
+    ) -> bool {
+        self.music_session_track_workers
+            .get(&session_id)
+            .and_then(|workers_by_track| workers_by_track.get(&track_id))
+            .is_some_and(|worker_ids| {
+                worker_ids
+                    .iter()
+                    .any(|worker_id| self.music_worker_is_live(*worker_id))
+            })
+    }
+
+    fn music_worker_is_live(&self, worker_id: WorkerID) -> bool {
+        self.sampler_pool
+            .first_node_state::<SamplerState, _>(worker_id, &self.context)
+            .is_some()
     }
 
     fn music_session_local_playhead(
@@ -970,6 +989,8 @@ impl FirewheelBackend {
         }
 
         if !all_ready {
+            // 资源未就绪时只记录目标播放集，不覆盖当前实际 worker 集；
+            // 这样切组时仍可继续沿用现有轨道，等新增轨资源就绪后再差量补齐。
             self.pending_music_playbacks.insert(
                 session_id,
                 PendingMusicPlayback {
@@ -978,49 +999,62 @@ impl FirewheelBackend {
                     playbacks: playbacks.clone(),
                 },
             );
-            self.active_music_clips
-                .insert(session_id, primary_playback.clip_id);
-            self.active_music_tracks
-                .insert(session_id, primary_playback.track_id);
-            self.active_music_binding_clips.insert(
-                session_id,
-                self.resolved_music_playbacks_by_track(&playbacks),
-            );
             return Ok(());
         }
 
         self.pending_music_playbacks.remove(&session_id);
         self.flush_finished_workers()?;
-        let existing_worker_count = self
-            .music_session_workers
-            .get(&session_id)
-            .map(|worker_ids| worker_ids.len())
-            .unwrap_or(0);
-        if existing_worker_count > 0 {
-            self.stop_music_session_workers(session_id, 0.0);
-            self.flush_finished_workers()?;
-        }
-
         let waiting_node_completion = matches!(
             self.runtime.music_status(session_id),
             Ok(status) if status.phase == MusicPhase::WaitingNodeCompletion
         );
         let start_audio_time_seconds = self.audio_clock_seconds();
+        let target_binding_clips = self.resolved_music_playbacks_by_track(&playbacks);
+        let current_binding_clips = self
+            .active_music_binding_clips
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        let current_track_workers = self
+            .music_session_track_workers
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut tracks_to_keep = HashSet::new();
+        for (&track_id, &clip_id) in &target_binding_clips {
+            if current_binding_clips.get(&track_id) == Some(&clip_id)
+                && self.music_session_track_has_live_worker(session_id, track_id)
+            {
+                tracks_to_keep.insert(track_id);
+            }
+        }
+
+        let mut workers_to_stop = Vec::new();
+        for (track_id, worker_ids) in &current_track_workers {
+            if !tracks_to_keep.contains(track_id) {
+                workers_to_stop.extend(worker_ids.iter().copied());
+            }
+        }
+
         let mut primary_resolved_clip = None;
         for (playback, resolved) in resolved_tracks {
+            let Some(track_id) = playback.track_id else {
+                continue;
+            };
+            if tracks_to_keep.contains(&track_id) {
+                continue;
+            }
             let schedule_internal_stop =
-                !waiting_node_completion || playback.track_id != Some(primary_track_id);
-            self.play_music_clip_resolved(
-                session_id,
-                playback
-                    .track_id
-                    .expect("node playback track id should exist"),
-                resolved,
-                schedule_internal_stop,
-            )?;
-            if playback.track_id == Some(primary_track_id) {
+                !waiting_node_completion || Some(track_id) != Some(primary_track_id);
+            self.play_music_clip_resolved(session_id, track_id, resolved, schedule_internal_stop)?;
+            if Some(track_id) == Some(primary_track_id) {
                 primary_resolved_clip = Some(resolved);
             }
+        }
+
+        if !workers_to_stop.is_empty() {
+            self.stop_music_session_worker_ids(session_id, workers_to_stop, 0.0);
         }
 
         if let Some(primary_resolved_clip) = primary_resolved_clip {
@@ -1029,17 +1063,17 @@ impl FirewheelBackend {
                 primary_resolved_clip,
                 start_audio_time_seconds,
             )?;
-        } else {
+        } else if !waiting_node_completion {
+            self.pending_node_completions.remove(&session_id);
+        } else if !tracks_to_keep.contains(&primary_track_id) {
             self.pending_node_completions.remove(&session_id);
         }
         self.active_music_clips
             .insert(session_id, primary_playback.clip_id);
         self.active_music_tracks
             .insert(session_id, primary_playback.track_id);
-        self.active_music_binding_clips.insert(
-            session_id,
-            self.resolved_music_playbacks_by_track(&playbacks),
-        );
+        self.active_music_binding_clips
+            .insert(session_id, target_binding_clips);
         self.update()?;
         Ok(())
     }
@@ -1753,6 +1787,50 @@ impl FirewheelBackend {
         for worker_id in worker_ids {
             self.worker_music_sessions.remove(&worker_id);
             self.worker_music_tracks.remove(&worker_id);
+            self.stop_worker(worker_id, fade_seconds);
+        }
+    }
+
+    fn stop_music_session_worker_ids(
+        &mut self,
+        session_id: MusicSessionId,
+        worker_ids: Vec<WorkerID>,
+        fade_seconds: f64,
+    ) {
+        if worker_ids.is_empty() {
+            return;
+        }
+
+        let worker_ids_to_stop: HashSet<_> = worker_ids.into_iter().collect();
+
+        if let Some(session_worker_ids) = self.music_session_workers.get_mut(&session_id) {
+            session_worker_ids.retain(|worker_id| !worker_ids_to_stop.contains(worker_id));
+            if session_worker_ids.is_empty() {
+                self.music_session_workers.remove(&session_id);
+            }
+        }
+
+        for worker_id in worker_ids_to_stop {
+            self.worker_music_sessions.remove(&worker_id);
+            let removed_track_id = self.worker_music_tracks.remove(&worker_id);
+
+            if let Some(track_id) = removed_track_id {
+                if let Some(workers_by_track) =
+                    self.music_session_track_workers.get_mut(&session_id)
+                {
+                    if let Some(track_worker_ids) = workers_by_track.get_mut(&track_id) {
+                        track_worker_ids.retain(|candidate| *candidate != worker_id);
+                        if track_worker_ids.is_empty() {
+                            workers_by_track.remove(&track_id);
+                        }
+                    }
+
+                    if workers_by_track.is_empty() {
+                        self.music_session_track_workers.remove(&session_id);
+                    }
+                }
+            }
+
             self.stop_worker(worker_id, fade_seconds);
         }
     }
