@@ -8,6 +8,8 @@ mod error;
 mod events;
 mod fx;
 mod music;
+#[cfg(test)]
+mod tests;
 mod types;
 mod workers;
 
