@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use std::{thread, time::Duration};
 
 use sonara_build::CompiledBankPackage;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Sonara 的构建层
 //!
 //! 这一层负责 authoring 数据校验和 bank 构建
@@ -11,9 +13,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use sonara_model::{
-    AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Event, EventContentNode,
-    EventId, NodeId, NodeRef, Parameter, ParameterId, ProjectFileError, Snapshot, SnapshotId,
-    StreamingMode,
+    AudioAsset, AuthoringProject, Bank, BankAsset, BankDefinition, Bus, Clip, ClipId, Event,
+    EventContentNode, EventId, MusicGraph, MusicGraphId, NodeId, NodeRef, Parameter, ParameterId,
+    ProjectFileError, ResumeSlot, ResumeSlotId, Snapshot, SnapshotId, StreamingMode, SyncDomain,
+    SyncDomainId, TrackId,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -46,12 +49,40 @@ pub enum BuildError {
     MissingBusDefinition,
     #[error("bank 定义引用了不存在的 snapshot")]
     MissingSnapshotDefinition,
+    #[error("bank 定义引用了不存在的 music graph")]
+    MissingMusicGraphDefinition,
     #[error("事件 switch 引用了不存在的参数")]
     MissingParameterDefinition,
     #[error("事件 switch 必须绑定枚举参数")]
     SwitchParameterNotEnum,
     #[error("事件 switch 引用了参数中不存在的枚举值")]
     UnknownSwitchVariant,
+    #[error("music graph 必须至少包含一个 node")]
+    EmptyMusicGraph,
+    #[error("music graph 中存在重复 node ID")]
+    DuplicateMusicNodeId,
+    #[error("music graph 中存在重复 track ID")]
+    DuplicateTrackId,
+    #[error("music graph 中存在重复 track group ID")]
+    DuplicateTrackGroupId,
+    #[error("music graph 引用了不存在的 node")]
+    MissingMusicNodeDefinition,
+    #[error("music graph 引用了不存在的 track")]
+    MissingTrackDefinition,
+    #[error("music graph 引用了不存在的 track group")]
+    MissingTrackGroupDefinition,
+    #[error("music graph 引用了不存在的 clip")]
+    MissingClipDefinition,
+    #[error("music graph 引用了不存在的 resume slot")]
+    MissingResumeSlotDefinition,
+    #[error("clip 引用了不存在的 sync domain")]
+    MissingSyncDomainDefinition,
+    #[error("music node 中存在重复 track binding")]
+    DuplicateTrackBinding,
+    #[error("music node 必须至少绑定一个 playback target")]
+    EmptyMusicNode,
+    #[error("music node 的 completion_source 没有对应的 track binding")]
+    MissingCompletionTrackBinding,
 }
 
 /// compiled bank 文件的最小 IO 错误。
@@ -85,9 +116,20 @@ pub enum CompiledBankFileError {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompiledBankPackage {
     pub bank: Bank,
+    #[serde(default)]
     pub events: Vec<Event>,
+    #[serde(default)]
     pub buses: Vec<Bus>,
+    #[serde(default)]
     pub snapshots: Vec<Snapshot>,
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub resume_slots: Vec<ResumeSlot>,
+    #[serde(default)]
+    pub sync_domains: Vec<SyncDomain>,
+    #[serde(default)]
+    pub music_graphs: Vec<MusicGraph>,
 }
 
 impl CompiledBankPackage {
@@ -109,6 +151,26 @@ impl CompiledBankPackage {
     /// 读取 runtime 会加载的 snapshot 定义。
     pub fn snapshots(&self) -> &[Snapshot] {
         &self.snapshots
+    }
+
+    /// 读取 runtime 会加载的 clip 定义。
+    pub fn clips(&self) -> &[Clip] {
+        &self.clips
+    }
+
+    /// 读取 runtime 会加载的记忆槽定义。
+    pub fn resume_slots(&self) -> &[ResumeSlot] {
+        &self.resume_slots
+    }
+
+    /// 读取 runtime 会加载的同步域定义。
+    pub fn sync_domains(&self) -> &[SyncDomain] {
+        &self.sync_domains
+    }
+
+    /// 读取 runtime 会加载的音乐图定义。
+    pub fn music_graphs(&self) -> &[MusicGraph] {
+        &self.music_graphs
     }
 
     /// 从 JSON 字符串读取 compiled bank 载荷。
@@ -238,8 +300,6 @@ pub fn build_bank(
     let asset_by_id: HashMap<Uuid, &AudioAsset> =
         assets.iter().map(|asset| (asset.id, asset)).collect();
     let mut auto_assets_used_by_one_shot = HashSet::new();
-    let mut resident_media = HashSet::new();
-    let mut streaming_media = HashSet::new();
 
     for event in events {
         validate_event(event)?;
@@ -256,26 +316,38 @@ pub fn build_bank(
                 auto_assets_used_by_one_shot.insert(asset_id);
             }
 
-            if !bank
-                .manifest
-                .assets
-                .iter()
-                .any(|bank_asset| bank_asset.id == asset_id)
-            {
-                bank.manifest.assets.push(BankAsset {
-                    id: asset.id,
-                    name: asset.name.clone(),
-                    source_path: asset.source_path.clone(),
-                    import_settings: asset.import_settings.clone(),
-                    streaming: asset.streaming,
-                });
-            }
+            add_bank_asset_to_manifest(&mut bank, asset);
         }
     }
 
+    finalize_bank_manifest_media(&mut bank, &auto_assets_used_by_one_shot);
+
+    Ok(bank)
+}
+
+fn add_bank_asset_to_manifest(bank: &mut Bank, asset: &AudioAsset) {
+    if !bank
+        .manifest
+        .assets
+        .iter()
+        .any(|bank_asset| bank_asset.id == asset.id)
+    {
+        bank.manifest.assets.push(BankAsset {
+            id: asset.id,
+            name: asset.name.clone(),
+            source_path: asset.source_path.clone(),
+            import_settings: asset.import_settings.clone(),
+            streaming: asset.streaming,
+        });
+    }
+}
+
+fn finalize_bank_manifest_media(bank: &mut Bank, auto_assets_used_by_one_shot: &HashSet<Uuid>) {
     // `Auto` 先给一个最小可落地规则:
     // 只被 `Persistent` 事件引用的资源按 streaming 导出,
     // 只要被 `OneShot` 引用过, 仍然按 resident 处理, 避免把短音效误分流。
+    let mut resident_media = HashSet::new();
+    let mut streaming_media = HashSet::new();
     for asset in &bank.manifest.assets {
         match resolve_media_residency(asset, &auto_assets_used_by_one_shot) {
             ResolvedMediaResidency::Resident => {
@@ -295,8 +367,6 @@ pub fn build_bank(
     bank.manifest.assets.sort_by(|a, b| a.id.cmp(&b.id));
     bank.manifest.resident_media.sort_unstable();
     bank.manifest.streaming_media.sort_unstable();
-
-    Ok(bank)
 }
 
 fn resolve_media_residency(
@@ -329,10 +399,32 @@ pub fn compile_bank_definition(
     definition: &BankDefinition,
     project: &AuthoringProject,
 ) -> Result<CompiledBankPackage, BuildError> {
+    let asset_by_id: HashMap<Uuid, &AudioAsset> = project
+        .assets
+        .iter()
+        .map(|asset| (asset.id, asset))
+        .collect();
     let event_by_id: HashMap<EventId, &Event> = project
         .events
         .iter()
         .map(|event| (event.id, event))
+        .collect();
+    let clip_by_id: HashMap<ClipId, &Clip> =
+        project.clips.iter().map(|clip| (clip.id, clip)).collect();
+    let resume_slot_by_id: HashMap<ResumeSlotId, &ResumeSlot> = project
+        .resume_slots
+        .iter()
+        .map(|slot| (slot.id, slot))
+        .collect();
+    let sync_domain_by_id: HashMap<SyncDomainId, &SyncDomain> = project
+        .sync_domains
+        .iter()
+        .map(|domain| (domain.id, domain))
+        .collect();
+    let music_graph_by_id: HashMap<MusicGraphId, &MusicGraph> = project
+        .music_graphs
+        .iter()
+        .map(|graph| (graph.id, graph))
         .collect();
     let bus_by_id: HashMap<_, &Bus> = project.buses.iter().map(|bus| (bus.id, bus)).collect();
     let snapshot_by_id: HashMap<SnapshotId, &Snapshot> = project
@@ -349,12 +441,30 @@ pub fn compile_bank_definition(
     let mut events = Vec::with_capacity(definition.events.len());
     let mut buses = Vec::with_capacity(definition.buses.len());
     let mut snapshots = Vec::with_capacity(definition.snapshots.len());
+    let mut clips = Vec::new();
+    let mut resume_slots = Vec::new();
+    let mut sync_domains = Vec::new();
+    let mut music_graphs = Vec::with_capacity(definition.music_graphs.len());
+    let mut clip_ids = Vec::new();
+    let mut resume_slot_ids = Vec::new();
+    let mut sync_domain_ids = Vec::new();
+    let mut auto_assets_used_by_one_shot = HashSet::new();
 
     for event_id in &definition.events {
         let event = event_by_id
             .get(event_id)
             .ok_or(BuildError::MissingEventDefinition)?;
         validate_event_against_parameters(event, &parameter_by_id)?;
+        if event.kind != sonara_model::EventKind::Persistent {
+            for asset_id in collect_event_asset_ids(event) {
+                let asset = asset_by_id
+                    .get(&asset_id)
+                    .ok_or(BuildError::MissingAudioAsset)?;
+                if asset.streaming == StreamingMode::Auto {
+                    auto_assets_used_by_one_shot.insert(asset_id);
+                }
+            }
+        }
         events.push((*event).clone());
     }
 
@@ -372,16 +482,73 @@ pub fn compile_bank_definition(
         snapshots.push((*snapshot).clone());
     }
 
+    for graph_id in &definition.music_graphs {
+        let graph = music_graph_by_id
+            .get(graph_id)
+            .ok_or(BuildError::MissingMusicGraphDefinition)?;
+        let dependencies =
+            validate_music_graph(graph, &clip_by_id, &resume_slot_by_id, &sync_domain_by_id)?;
+
+        for clip_id in dependencies.clip_ids {
+            push_unique(&mut clip_ids, clip_id);
+        }
+        for slot_id in dependencies.resume_slot_ids {
+            push_unique(&mut resume_slot_ids, slot_id);
+        }
+        for sync_domain_id in dependencies.sync_domain_ids {
+            push_unique(&mut sync_domain_ids, sync_domain_id);
+        }
+
+        music_graphs.push((*graph).clone());
+    }
+
+    for clip_id in &clip_ids {
+        let clip = clip_by_id
+            .get(clip_id)
+            .ok_or(BuildError::MissingClipDefinition)?;
+        clips.push((*clip).clone());
+    }
+
+    for slot_id in &resume_slot_ids {
+        let slot = resume_slot_by_id
+            .get(slot_id)
+            .ok_or(BuildError::MissingResumeSlotDefinition)?;
+        resume_slots.push((*slot).clone());
+    }
+
+    for sync_domain_id in &sync_domain_ids {
+        let sync_domain = sync_domain_by_id
+            .get(sync_domain_id)
+            .ok_or(BuildError::MissingSyncDomainDefinition)?;
+        sync_domains.push((*sync_domain).clone());
+    }
+
     let mut bank = build_bank(definition.name.clone(), &events, &project.assets)?;
     bank.id = definition.id;
     bank.objects.buses = definition.buses.clone();
     bank.objects.snapshots = definition.snapshots.clone();
+    bank.objects.music_graphs = definition.music_graphs.clone();
+    bank.objects.clips = clip_ids.clone();
+    bank.objects.resume_slots = resume_slot_ids.clone();
+    bank.objects.sync_domains = sync_domain_ids.clone();
+
+    for clip in &clips {
+        let asset = asset_by_id
+            .get(&clip.asset_id)
+            .ok_or(BuildError::MissingAudioAsset)?;
+        add_bank_asset_to_manifest(&mut bank, asset);
+    }
+    finalize_bank_manifest_media(&mut bank, &auto_assets_used_by_one_shot);
 
     Ok(CompiledBankPackage {
         bank,
         events,
         buses,
         snapshots,
+        clips,
+        resume_slots,
+        sync_domains,
+        music_graphs,
     })
 }
 
@@ -461,6 +628,122 @@ pub fn collect_event_asset_ids(event: &Event) -> HashSet<Uuid> {
         .collect()
 }
 
+#[derive(Default)]
+struct MusicGraphDependencies {
+    clip_ids: Vec<ClipId>,
+    resume_slot_ids: Vec<ResumeSlotId>,
+    sync_domain_ids: Vec<SyncDomainId>,
+}
+
+fn validate_music_graph(
+    graph: &MusicGraph,
+    clip_by_id: &HashMap<ClipId, &Clip>,
+    resume_slot_by_id: &HashMap<ResumeSlotId, &ResumeSlot>,
+    sync_domain_by_id: &HashMap<SyncDomainId, &SyncDomain>,
+) -> Result<MusicGraphDependencies, BuildError> {
+    if graph.nodes.is_empty() {
+        return Err(BuildError::EmptyMusicGraph);
+    }
+
+    let mut node_ids = HashSet::new();
+    let mut track_ids = HashSet::new();
+    let mut track_group_ids = HashSet::new();
+    let mut dependencies = MusicGraphDependencies::default();
+
+    for group in &graph.groups {
+        if !track_group_ids.insert(group.id) {
+            return Err(BuildError::DuplicateTrackGroupId);
+        }
+    }
+
+    for track in &graph.tracks {
+        if !track_ids.insert(track.id) {
+            return Err(BuildError::DuplicateTrackId);
+        }
+        if let Some(group_id) = track.group {
+            if !track_group_ids.contains(&group_id) {
+                return Err(BuildError::MissingTrackGroupDefinition);
+            }
+        }
+    }
+
+    for node in &graph.nodes {
+        if !node_ids.insert(node.id) {
+            return Err(BuildError::DuplicateMusicNodeId);
+        }
+
+        if node.bindings.is_empty() {
+            return Err(BuildError::EmptyMusicNode);
+        }
+
+        if let Some(memory_slot) = node.memory_slot {
+            if !resume_slot_by_id.contains_key(&memory_slot) {
+                return Err(BuildError::MissingResumeSlotDefinition);
+            }
+            push_unique(&mut dependencies.resume_slot_ids, memory_slot);
+        }
+
+        let mut state_binding_track_ids = HashSet::<TrackId>::new();
+        for binding in &node.bindings {
+            if !track_ids.contains(&binding.track_id) {
+                return Err(BuildError::MissingTrackDefinition);
+            }
+            if !state_binding_track_ids.insert(binding.track_id) {
+                return Err(BuildError::DuplicateTrackBinding);
+            }
+
+            for clip_id in binding.target.clip_ids() {
+                let clip = clip_by_id
+                    .get(&clip_id)
+                    .ok_or(BuildError::MissingClipDefinition)?;
+                push_unique(&mut dependencies.clip_ids, clip_id);
+
+                if let Some(sync_domain_id) = clip.sync_domain {
+                    if !sync_domain_by_id.contains_key(&sync_domain_id) {
+                        return Err(BuildError::MissingSyncDomainDefinition);
+                    }
+                    push_unique(&mut dependencies.sync_domain_ids, sync_domain_id);
+                }
+            }
+        }
+
+        if let Some(completion_source) = node.completion_source {
+            if !node
+                .bindings
+                .iter()
+                .any(|binding| binding.track_id == completion_source)
+            {
+                return Err(BuildError::MissingCompletionTrackBinding);
+            }
+        }
+    }
+
+    if let Some(initial_node) = graph.initial_node {
+        if !node_ids.contains(&initial_node) {
+            return Err(BuildError::MissingMusicNodeDefinition);
+        }
+    }
+
+    for edge in &graph.edges {
+        if !node_ids.contains(&edge.from) || !node_ids.contains(&edge.to) {
+            return Err(BuildError::MissingMusicNodeDefinition);
+        }
+        if let Some(requested_target) = edge.requested_target {
+            if !node_ids.contains(&requested_target) {
+                return Err(BuildError::MissingMusicNodeDefinition);
+            }
+        }
+    }
+
+    Ok(dependencies)
+}
+
+fn push_unique<T: PartialEq + Copy>(items: &mut Vec<T>, value: T) {
+    if !items.contains(&value) {
+        items.push(value);
+    }
+}
+
 fn validate_ref(
     node_ref: NodeRef,
     node_ids: &HashSet<NodeId>,
@@ -520,9 +803,11 @@ pub enum ProjectExportBankError {
 mod tests {
     use camino::Utf8PathBuf;
     use sonara_model::{
-        AuthoringProject, EnumParameter, EventContentRoot, EventId, EventKind, Parameter,
-        ParameterId, ParameterScope, SamplerNode, SequenceNode, SpatialMode, SwitchCase,
-        SwitchNode,
+        AuthoringProject, Clip, EdgeTrigger, EntryPolicy, EnumParameter, EventContentRoot, EventId,
+        EventKind, MemoryPolicy, MusicEdge, MusicGraph, MusicNode, MusicNodeId, Parameter,
+        ParameterId, ParameterScope, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
+        SpatialMode, SwitchCase, SwitchNode, SyncDomain, Track, TrackBinding, TrackGroup,
+        TrackGroupMode, TrackRole,
     };
 
     use super::*;
@@ -548,6 +833,10 @@ mod tests {
         let mut asset = AudioAsset::new(name, Utf8PathBuf::from(format!("audio/{name}.wav")));
         asset.streaming = streaming;
         asset
+    }
+
+    fn make_clip(name: &str, asset_id: Uuid) -> Clip {
+        Clip::new(name, asset_id)
     }
 
     #[test]
@@ -938,6 +1227,10 @@ mod tests {
             events: Vec::new(),
             buses: Vec::new(),
             snapshots: Vec::new(),
+            clips: Vec::new(),
+            resume_slots: Vec::new(),
+            sync_domains: Vec::new(),
+            music_graphs: Vec::new(),
         };
 
         let json = package
@@ -947,6 +1240,230 @@ mod tests {
             .expect("compiled package should deserialize from JSON");
 
         assert_eq!(decoded.bank.name, "core");
+    }
+
+    #[test]
+    fn compile_bank_definition_collects_selected_music_graph_dependencies() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let mut clip = make_clip("boss_loop", asset.id);
+        let sync_domain = SyncDomain::new("boss_sync");
+        clip.sync_domain = Some(sync_domain.id);
+        let resume_slot = ResumeSlot::new("boss_memory");
+        let state_id = MusicNodeId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(state_id);
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicNode {
+            id: state_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy {
+                ttl_seconds: Some(12.0),
+                reset_to: EntryPolicy::ClipStart,
+            },
+            default_entry: EntryPolicy::Resume,
+            externally_targetable: true,
+            completion_source: None,
+        });
+        graph.edges.push(MusicEdge {
+            from: state_id,
+            to: state_id,
+            requested_target: None,
+            trigger: EdgeTrigger::NextMatchingCue {
+                tag: "loop_out".into(),
+            },
+            destination: EntryPolicy::SameSyncPosition,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset.clone());
+        project.clips.push(clip.clone());
+        project.resume_slots.push(resume_slot.clone());
+        project.sync_domains.push(sync_domain.clone());
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        let package =
+            compile_bank_definition(&definition, &project).expect("music graph should compile");
+
+        assert_eq!(package.bank.objects.music_graphs, vec![graph.id]);
+        assert_eq!(package.bank.objects.clips, vec![clip.id]);
+        assert_eq!(package.bank.objects.resume_slots, vec![resume_slot.id]);
+        assert_eq!(package.bank.objects.sync_domains, vec![sync_domain.id]);
+        assert_eq!(package.clips, vec![clip]);
+        assert_eq!(package.resume_slots, vec![resume_slot]);
+        assert_eq!(package.sync_domains, vec![sync_domain]);
+        assert_eq!(package.music_graphs, vec![graph]);
+        assert_eq!(package.bank.manifest.assets.len(), 1);
+        assert_eq!(package.bank.manifest.assets[0].id, asset.id);
+        assert_eq!(package.bank.manifest.streaming_media, vec![asset.id]);
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_music_graph_missing_clip() {
+        let resume_slot = ResumeSlot::new("boss_memory");
+        let state_id = MusicNodeId::new();
+        let missing_clip_id = sonara_model::ClipId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(state_id);
+        graph.tracks.push(main_track.clone());
+        graph.nodes.push(MusicNode {
+            id: state_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: missing_clip_id,
+                },
+            }],
+            memory_slot: Some(resume_slot.id),
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.resume_slots.push(resume_slot);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingClipDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_music_graph_binding_missing_track() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let state_id = MusicNodeId::new();
+        let missing_track_id = Track::new("main", TrackRole::Main).id;
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(state_id);
+        graph.nodes.push(MusicNode {
+            id: state_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: missing_track_id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingTrackDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_rejects_music_graph_track_missing_group() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let node_id = MusicNodeId::new();
+        let mut track = Track::new("main", TrackRole::Main);
+        track.group = Some(sonara_model::TrackGroupId::new());
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(node_id);
+        graph.tracks.push(track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        assert!(matches!(
+            compile_bank_definition(&definition, &project),
+            Err(BuildError::MissingTrackGroupDefinition)
+        ));
+    }
+
+    #[test]
+    fn compile_bank_definition_preserves_music_track_groups() {
+        let asset = make_asset("boss_theme", StreamingMode::Auto);
+        let clip = make_clip("boss_loop", asset.id);
+        let node_id = MusicNodeId::new();
+        let group = TrackGroup::new("day_style", TrackGroupMode::Exclusive);
+        let mut track = Track::new("main", TrackRole::Main);
+        track.group = Some(group.id);
+        let mut graph = MusicGraph::new("boss_flow");
+        graph.initial_node = Some(node_id);
+        graph.groups.push(group.clone());
+        graph.tracks.push(track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+
+        let mut project = AuthoringProject::new("demo");
+        project.assets.push(asset);
+        project.clips.push(clip);
+        project.music_graphs.push(graph.clone());
+
+        let mut definition = BankDefinition::new("music");
+        definition.music_graphs.push(graph.id);
+
+        let package = compile_bank_definition(&definition, &project)
+            .expect("bank should compile with track groups");
+        let compiled_graph = package
+            .music_graphs
+            .first()
+            .expect("compiled package should contain the graph");
+
+        assert_eq!(compiled_graph.groups, vec![group]);
+        assert_eq!(
+            compiled_graph.tracks[0].group,
+            Some(compiled_graph.groups[0].id)
+        );
     }
 
     #[test]

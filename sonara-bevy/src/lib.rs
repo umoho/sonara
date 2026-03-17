@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Bevy 集成层骨架
 
 use bevy_app::{App, Plugin, Update};
@@ -5,12 +7,15 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
-    Bank, BankId, Bus, Event, EventId, ParameterId, ParameterValue, Snapshot, SnapshotId,
+    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId, ParameterId,
+    ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
 };
-pub use sonara_runtime::EventInstanceState;
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
     RuntimeError, RuntimeRequest, RuntimeRequestResult, SnapshotInstanceId, SonaraRuntime,
+};
+pub use sonara_runtime::{
+    EventInstanceState, MusicPhase, MusicSessionId, MusicStatus, TrackGroupState,
 };
 use thiserror::Error;
 
@@ -108,7 +113,16 @@ impl SonaraAudio {
         bank: Bank,
         events: Vec<Event>,
     ) -> Result<BankId, AudioBackendError> {
-        self.load_bank_with_definitions(bank, events, Vec::new(), Vec::new())
+        self.load_bank_with_definitions(
+            bank,
+            events,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     /// 加载一个 bank 以及和它配套的高层对象定义。
@@ -118,15 +132,37 @@ impl SonaraAudio {
         events: Vec<Event>,
         buses: Vec<Bus>,
         snapshots: Vec<Snapshot>,
+        clips: Vec<Clip>,
+        resume_slots: Vec<ResumeSlot>,
+        sync_domains: Vec<SyncDomain>,
+        music_graphs: Vec<MusicGraph>,
     ) -> Result<BankId, AudioBackendError> {
         let bank_id = bank.id;
 
         match &mut self.backend {
             SonaraBackend::Runtime(runtime) => {
-                runtime.load_bank_with_definitions(bank, events, buses, snapshots)?;
+                runtime.load_bank_with_definitions(
+                    bank,
+                    events,
+                    buses,
+                    snapshots,
+                    clips,
+                    resume_slots,
+                    sync_domains,
+                    music_graphs,
+                )?;
             }
             SonaraBackend::Firewheel(backend) => {
-                backend.load_bank_with_definitions(bank, events, buses, snapshots)?;
+                backend.load_bank_with_definitions(
+                    bank,
+                    events,
+                    buses,
+                    snapshots,
+                    clips,
+                    resume_slots,
+                    sync_domains,
+                    music_graphs,
+                )?;
             }
         }
 
@@ -143,6 +179,10 @@ impl SonaraAudio {
             package.events,
             package.buses,
             package.snapshots,
+            package.clips,
+            package.resume_slots,
+            package.sync_domains,
+            package.music_graphs,
         )
     }
 
@@ -344,6 +384,169 @@ impl SonaraAudio {
         }
     }
 
+    /// 读取一个事件实例当前的代表性播放头。
+    ///
+    /// 纯 runtime 模式没有真实音频后端，因此返回 `None`。
+    pub fn instance_playhead_seconds(&self, instance_id: EventInstanceId) -> Option<f64> {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => None,
+            SonaraBackend::Firewheel(backend) => backend
+                .instance_playhead(instance_id)
+                .map(|playhead| playhead.position_seconds),
+        }
+    }
+
+    /// 启动一个音乐图会话，使用图中声明的初始节点。
+    pub fn play_music_graph(
+        &mut self,
+        graph_id: MusicGraphId,
+    ) -> Result<MusicSessionId, AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => Ok(runtime.play_music_graph(graph_id)?),
+            SonaraBackend::Firewheel(backend) => Ok(backend.play_music_graph(graph_id)?),
+        }
+    }
+
+    /// 启动一个音乐图会话，并显式指定初始节点。
+    pub fn play_music_graph_in_node(
+        &mut self,
+        graph_id: MusicGraphId,
+        initial_node: MusicNodeId,
+    ) -> Result<MusicSessionId, AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                Ok(runtime.play_music_graph_in_node(graph_id, Some(initial_node))?)
+            }
+            SonaraBackend::Firewheel(backend) => {
+                Ok(backend.play_music_graph_in_node(graph_id, initial_node)?)
+            }
+        }
+    }
+
+    /// 请求一个音乐会话切换到目标节点。
+    pub fn request_music_node(
+        &mut self,
+        session_id: MusicSessionId,
+        target_node: MusicNodeId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                runtime.request_music_node(session_id, target_node)?;
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.request_music_node(session_id, target_node)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 通知音乐会话：当前已经到达允许退出的切点。
+    pub fn complete_music_exit(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.complete_music_exit(session_id)?,
+            SonaraBackend::Firewheel(backend) => backend.complete_music_exit(session_id)?,
+        }
+
+        Ok(())
+    }
+
+    /// 通知音乐会话：当前自动推进节点已经播放完成。
+    pub fn complete_music_node_completion(
+        &mut self,
+        session_id: MusicSessionId,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                runtime.complete_music_node_completion(session_id)?
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.complete_music_node_completion(session_id)?
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 停止一个音乐会话。
+    pub fn stop_music_session(
+        &mut self,
+        session_id: MusicSessionId,
+        fade: Fade,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.stop_music_session(session_id, fade)?,
+            SonaraBackend::Firewheel(backend) => backend.stop_music_session(session_id, fade)?,
+        }
+
+        Ok(())
+    }
+
+    /// 查询音乐会话当前对游戏侧可见的状态。
+    pub fn music_status(
+        &self,
+        session_id: MusicSessionId,
+    ) -> Result<MusicStatus, AudioBackendError> {
+        match &self.backend {
+            SonaraBackend::Runtime(runtime) => Ok(runtime.music_status(session_id)?),
+            SonaraBackend::Firewheel(backend) => Ok(backend.music_status(session_id)?),
+        }
+    }
+
+    /// 查询一个音乐会话中某个显式 track group 的当前状态。
+    pub fn music_track_group_state(
+        &self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+    ) -> Result<TrackGroupState, AudioBackendError> {
+        match &self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                Ok(runtime.music_track_group_state(session_id, group_id)?)
+            }
+            SonaraBackend::Firewheel(backend) => {
+                Ok(backend.music_track_group_state(session_id, group_id)?)
+            }
+        }
+    }
+
+    /// 设置一个音乐会话中某个显式 track group 的开关状态。
+    pub fn set_music_track_group_active(
+        &mut self,
+        session_id: MusicSessionId,
+        group_id: TrackGroupId,
+        active: bool,
+    ) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => {
+                runtime.set_music_track_group_active(session_id, group_id, active)?
+            }
+            SonaraBackend::Firewheel(backend) => {
+                backend.set_music_track_group_active(session_id, group_id, active)?
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 当前音乐会话是否还在等待媒体资源就绪。
+    pub fn music_session_pending_media(&self, session_id: MusicSessionId) -> bool {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => false,
+            SonaraBackend::Firewheel(backend) => backend.music_session_pending_media(session_id),
+        }
+    }
+
+    /// 读取音乐会话当前的代表性播放头秒数。
+    pub fn music_session_playhead_seconds(&self, session_id: MusicSessionId) -> Option<f64> {
+        match &self.backend {
+            SonaraBackend::Runtime(_) => None,
+            SonaraBackend::Firewheel(backend) => backend.music_session_playhead_seconds(session_id),
+        }
+    }
+
     /// 取出当前所有待处理请求
     pub fn drain_requests(&mut self) -> Vec<AudioRequest> {
         match &mut self.backend {
@@ -508,8 +711,9 @@ mod tests {
         system::Single,
     };
     use sonara_model::{
-        EventContentRoot, EventKind, NodeId, NodeRef, SamplerNode, SpatialMode, SwitchCase,
-        SwitchNode,
+        Clip, EdgeTrigger, EntryPolicy, EventContentRoot, EventKind, MemoryPolicy, MusicEdge,
+        MusicGraph, MusicNode, MusicNodeId, NodeId, NodeRef, PlaybackTarget, SamplerNode,
+        SpatialMode, SwitchCase, SwitchNode, Track, TrackBinding, TrackRole,
     };
     use uuid::Uuid;
 
@@ -547,6 +751,93 @@ mod tests {
             voice_limit: None,
             steal_policy: None,
         }
+    }
+
+    fn make_music_graph() -> (Clip, Clip, Clip, MusicGraph, MusicNodeId, MusicNodeId) {
+        let preheat_clip = Clip::new("preheat_loop", Uuid::now_v7());
+        let bridge_clip = Clip::new("preheat_to_boss", Uuid::now_v7());
+        let boss_clip = Clip::new("boss_loop", Uuid::now_v7());
+        let preheat_state = MusicNodeId::new();
+        let bridge_state = MusicNodeId::new();
+        let boss_state = MusicNodeId::new();
+        let main_track = Track::new("music_main", TrackRole::Main);
+        let bridge_track = Track::new("music_bridge", TrackRole::Bridge);
+        let mut graph = MusicGraph::new("boss_music");
+        graph.initial_node = Some(preheat_state);
+        graph.tracks.push(main_track.clone());
+        graph.tracks.push(bridge_track.clone());
+        graph.nodes.push(MusicNode {
+            id: preheat_state,
+            name: "preheat".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: preheat_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+        graph.nodes.push(MusicNode {
+            id: bridge_state,
+            name: "bridge".into(),
+            bindings: vec![TrackBinding {
+                track_id: bridge_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: bridge_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: false,
+            completion_source: Some(bridge_track.id),
+        });
+        graph.nodes.push(MusicNode {
+            id: boss_state,
+            name: "boss".into(),
+            bindings: vec![TrackBinding {
+                track_id: main_track.id,
+                target: PlaybackTarget::Clip {
+                    clip_id: boss_clip.id,
+                },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: None,
+        });
+        graph.edges.push(MusicEdge {
+            from: preheat_state,
+            to: bridge_state,
+            requested_target: Some(boss_state),
+            trigger: EdgeTrigger::NextMatchingCue {
+                tag: "battle_ready".into(),
+            },
+            destination: EntryPolicy::ClipStart,
+        });
+        graph.edges.push(MusicEdge {
+            from: bridge_state,
+            to: boss_state,
+            requested_target: Some(boss_state),
+            trigger: EdgeTrigger::OnComplete,
+            destination: EntryPolicy::EntryCue {
+                tag: "boss_in".into(),
+            },
+        });
+
+        (
+            preheat_clip,
+            bridge_clip,
+            boss_clip,
+            graph,
+            preheat_state,
+            boss_state,
+        )
     }
 
     #[test]
@@ -840,5 +1131,101 @@ mod tests {
 
         assert_eq!(emitter_id, plan_emitter_id);
         assert_eq!(plan_asset_ids, vec![asset_id]);
+    }
+
+    #[test]
+    fn music_graph_api_tracks_transition_lifecycle_in_runtime_mode() {
+        let (preheat_clip, bridge_clip, boss_clip, graph, preheat_state, boss_state) =
+            make_music_graph();
+        let mut bank = Bank::new("music");
+        bank.objects
+            .clips
+            .extend([preheat_clip.id, bridge_clip.id, boss_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, bridge_clip, boss_clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("music bank should load");
+
+        let session_id = audio
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.active_node, preheat_state);
+        assert_eq!(status.phase, MusicPhase::Stable);
+
+        audio
+            .request_music_node(session_id, boss_state)
+            .expect("music node request should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.desired_target_node, boss_state);
+        assert_eq!(status.phase, MusicPhase::WaitingExitCue);
+
+        audio
+            .complete_music_exit(session_id)
+            .expect("exit cue completion should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.phase, MusicPhase::WaitingNodeCompletion);
+
+        audio
+            .complete_music_node_completion(session_id)
+            .expect("bridge completion should succeed");
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.active_node, boss_state);
+        assert_eq!(status.phase, MusicPhase::Stable);
+    }
+
+    #[test]
+    fn stop_music_session_marks_session_stopped() {
+        let (preheat_clip, bridge_clip, boss_clip, graph, _, _) = make_music_graph();
+        let mut bank = Bank::new("music");
+        bank.objects
+            .clips
+            .extend([preheat_clip.id, bridge_clip.id, boss_clip.id]);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut audio = SonaraAudio::new();
+        audio
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![preheat_clip, bridge_clip, boss_clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("music bank should load");
+
+        let session_id = audio
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+        audio
+            .stop_music_session(session_id, Fade::IMMEDIATE)
+            .expect("stopping music session should succeed");
+
+        let status = audio
+            .music_status(session_id)
+            .expect("music status should resolve");
+        assert_eq!(status.phase, MusicPhase::Stopped);
     }
 }

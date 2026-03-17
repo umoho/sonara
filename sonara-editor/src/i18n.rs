@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! 编辑器 UI 的最小 i18n 支撑。
 //!
 //! 当前只覆盖 editor 自己的界面文案, 不向 model/build/runtime 扩散。

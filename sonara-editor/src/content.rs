@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use eframe::egui::{self, RichText};
 use sonara_model::{
     Event, EventContentNode, EventContentRoot, NodeId, NodeRef, SamplerNode, SwitchCase, SwitchNode,

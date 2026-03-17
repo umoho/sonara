@@ -1,0 +1,292 @@
+{
+  "bank": {
+    "id": "019d0000-0000-7000-8000-000000000001",
+    "name": "cue_trigger",
+    "objects": {
+      "events": [],
+      "buses": [],
+      "snapshots": [],
+      "clips": [
+        "019d0000-0000-7000-8000-000000000101",
+        "019d0000-0000-7000-8000-000000000102",
+        "019d0000-0000-7000-8000-000000000103",
+        "019d0000-0000-7000-8000-000000000104",
+        "019d0000-0000-7000-8000-000000000105"
+      ],
+      "resume_slots": [],
+      "sync_domains": [],
+      "music_graphs": [
+        "019d0000-0000-7000-8000-000000000201"
+      ]
+    },
+    "manifest": {
+      "assets": [
+        {
+          "id": "019d0000-0000-7000-8000-000000000301",
+          "name": "intro",
+          "source_path": "private_assets/intro.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000302",
+          "name": "warmup",
+          "source_path": "private_assets/warmup.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000303",
+          "name": "transition",
+          "source_path": "private_assets/transition.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000304",
+          "name": "climax",
+          "source_path": "private_assets/climax.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000305",
+          "name": "transition_stinger_noise",
+          "source_path": "private_assets/transition_stinger_noise.wav",
+          "import_settings": {
+            "normalize": false,
+            "target_sample_rate": null
+          },
+          "streaming": "Auto"
+        }
+      ],
+      "resident_media": [
+        "019d0000-0000-7000-8000-000000000305"
+      ],
+      "streaming_media": [
+        "019d0000-0000-7000-8000-000000000301",
+        "019d0000-0000-7000-8000-000000000302",
+        "019d0000-0000-7000-8000-000000000303",
+        "019d0000-0000-7000-8000-000000000304"
+      ]
+    }
+  },
+  "events": [],
+  "buses": [],
+  "snapshots": [],
+  "clips": [
+    {
+      "id": "019d0000-0000-7000-8000-000000000101",
+      "name": "intro",
+      "asset_id": "019d0000-0000-7000-8000-000000000301",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019d0000-0000-7000-8000-000000000102",
+      "name": "warmup",
+      "asset_id": "019d0000-0000-7000-8000-000000000302",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019d0000-0000-7000-8000-000000000103",
+      "name": "transition",
+      "asset_id": "019d0000-0000-7000-8000-000000000303",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019d0000-0000-7000-8000-000000000104",
+      "name": "climax",
+      "asset_id": "019d0000-0000-7000-8000-000000000304",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    },
+    {
+      "id": "019d0000-0000-7000-8000-000000000105",
+      "name": "transition_stinger",
+      "asset_id": "019d0000-0000-7000-8000-000000000305",
+      "source_range": null,
+      "loop_range": null,
+      "cues": [],
+      "sync_domain": null
+    }
+  ],
+  "resume_slots": [],
+  "sync_domains": [],
+  "music_graphs": [
+    {
+      "id": "019d0000-0000-7000-8000-000000000201",
+      "name": "cue_trigger",
+      "initial_node": "019d0000-0000-7000-8000-000000000501",
+      "tracks": [
+        {
+          "id": "019d0000-0000-7000-8000-000000000601",
+          "name": "music_main",
+          "role": "Main"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000602",
+          "name": "music_stinger",
+          "role": "Stinger"
+        }
+      ],
+      "nodes": [
+        {
+          "id": "019d0000-0000-7000-8000-000000000501",
+          "name": "intro",
+          "bindings": [
+            {
+              "track_id": "019d0000-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019d0000-0000-7000-8000-000000000101"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": false,
+          "completion_source": "019d0000-0000-7000-8000-000000000601"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000502",
+          "name": "warmup",
+          "bindings": [
+            {
+              "track_id": "019d0000-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019d0000-0000-7000-8000-000000000102"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": true,
+          "completion_source": "019d0000-0000-7000-8000-000000000601"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000503",
+          "name": "transition",
+          "bindings": [
+            {
+              "track_id": "019d0000-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019d0000-0000-7000-8000-000000000103"
+                }
+              }
+            },
+            {
+              "track_id": "019d0000-0000-7000-8000-000000000602",
+              "target": {
+                "Clip": {
+                  "clip_id": "019d0000-0000-7000-8000-000000000105"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": false,
+          "completion_source": "019d0000-0000-7000-8000-000000000601"
+        },
+        {
+          "id": "019d0000-0000-7000-8000-000000000504",
+          "name": "climax",
+          "bindings": [
+            {
+              "track_id": "019d0000-0000-7000-8000-000000000601",
+              "target": {
+                "Clip": {
+                  "clip_id": "019d0000-0000-7000-8000-000000000104"
+                }
+              }
+            }
+          ],
+          "memory_slot": null,
+          "memory_policy": {
+            "ttl_seconds": null,
+            "reset_to": "ClipStart"
+          },
+          "default_entry": "ClipStart",
+          "externally_targetable": true,
+          "completion_source": "019d0000-0000-7000-8000-000000000601"
+        }
+      ],
+      "edges": [
+        {
+          "from": "019d0000-0000-7000-8000-000000000501",
+          "to": "019d0000-0000-7000-8000-000000000502",
+          "requested_target": null,
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        },
+        {
+          "from": "019d0000-0000-7000-8000-000000000502",
+          "to": "019d0000-0000-7000-8000-000000000502",
+          "requested_target": null,
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        },
+        {
+          "from": "019d0000-0000-7000-8000-000000000502",
+          "to": "019d0000-0000-7000-8000-000000000503",
+          "requested_target": "019d0000-0000-7000-8000-000000000504",
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        },
+        {
+          "from": "019d0000-0000-7000-8000-000000000503",
+          "to": "019d0000-0000-7000-8000-000000000504",
+          "requested_target": "019d0000-0000-7000-8000-000000000504",
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        },
+        {
+          "from": "019d0000-0000-7000-8000-000000000504",
+          "to": "019d0000-0000-7000-8000-000000000504",
+          "requested_target": null,
+          "trigger": "OnComplete",
+          "destination": "ClipStart"
+        }
+      ]
+    }
+  ]
+}

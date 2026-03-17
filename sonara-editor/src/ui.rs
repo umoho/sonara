@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use eframe::egui::{self, Align, Color32, Layout, RichText, TextEdit};
 use sonara_build::collect_event_asset_ids;
 use sonara_model::{EventKind, Parameter, ParameterScope, SpatialMode};

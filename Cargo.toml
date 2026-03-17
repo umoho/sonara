@@ -12,13 +12,13 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "MPL-2.0"
 version = "0.1.0"
 
 [workspace.dependencies]
 camino = { version = "1.1.9", features = ["serde1"] }
-firewheel = { version = "0.10.0", default-features = false, features = ["cpal", "sampler_node", "std", "tracing"] }
-firewheel-pool = { version = "0.10.0", default-features = false, features = ["sampler", "std"] }
+firewheel = { version = "0.10.0", default-features = false, features = ["cpal", "musical_transport", "sampler_node", "scheduled_events", "std", "tracing"] }
+firewheel-pool = { version = "0.10.0", default-features = false, features = ["sampler", "scheduled_events", "std"] }
 firewheel-symphonium = { version = "0.10.0", default-features = false, features = ["resample"] }
 hound = "3.5.1"
 serde = { version = "1.0.219", features = ["derive"] }
