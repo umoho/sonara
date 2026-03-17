@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use sonara_model::{
-    Bank, BankId, BankObjects, BusId, Clip, ClipId, EdgeTrigger, EntryPolicy, Event,
+    Bank, BankId, BankObjects, Bus, BusId, Clip, ClipId, EdgeTrigger, EntryPolicy, Event,
     EventContentNode, EventId, MusicEdge, MusicGraph, MusicGraphId, MusicNode, MusicNodeId, NodeId,
     NodeRef, ParameterId, ParameterValue, PlaybackTarget, ResumeSlot, ResumeSlotId, Snapshot,
     SnapshotId, SyncDomain, SyncDomainId, TrackGroupId, TrackGroupMode, TrackId, TrackRole,
@@ -242,7 +242,7 @@ impl QueuedRuntime {
         &mut self,
         bank: Bank,
         events: Vec<Event>,
-        buses: Vec<sonara_model::Bus>,
+        buses: Vec<Bus>,
         snapshots: Vec<Snapshot>,
         clips: Vec<Clip>,
         resume_slots: Vec<ResumeSlot>,
@@ -309,6 +309,11 @@ impl QueuedRuntime {
         self.runtime.push_snapshot(snapshot_id, fade)
     }
 
+    /// 设置一个 bus gain。
+    pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), RuntimeError> {
+        self.runtime.set_bus_gain(bus_id, gain)
+    }
+
     /// 创建一个 emitter。
     pub fn create_emitter(&mut self) -> EmitterId {
         self.runtime.create_emitter()
@@ -322,6 +327,11 @@ impl QueuedRuntime {
     /// 读取当前活动实例的播放计划。
     pub fn active_plan(&self, instance_id: EventInstanceId) -> Option<&PlaybackPlan> {
         self.runtime.active_plan(instance_id)
+    }
+
+    /// 读取某个 bus 当前的 live gain。
+    pub fn bus_gain(&self, bus_id: BusId) -> Option<f32> {
+        self.runtime.bus_gain(bus_id)
     }
 
     /// 查询一个事件实例当前对游戏侧可见的播放状态。
@@ -626,6 +636,8 @@ pub enum RuntimeError {
     SnapshotNotLoaded(SnapshotId),
     #[error("snapshot 引用了不存在的 bus `{0:?}`")]
     SnapshotTargetBusNotFound(BusId),
+    #[error("bus `{0:?}` 不存在")]
+    BusNotLoaded(BusId),
     #[error("music graph `{0:?}` is not loaded")]
     MusicGraphNotLoaded(MusicGraphId),
     #[error("music graph `{0:?}` has no nodes")]
@@ -667,6 +679,7 @@ pub enum RuntimeError {
 #[derive(Debug, Default)]
 pub struct SonaraRuntime {
     banks: HashMap<BankId, BankObjects>,
+    buses: HashMap<BusId, Bus>,
     events: HashMap<EventId, Event>,
     clips: HashMap<ClipId, Clip>,
     resume_slots: HashMap<ResumeSlotId, ResumeSlot>,
@@ -711,7 +724,7 @@ impl SonaraRuntime {
         &mut self,
         bank: Bank,
         events: Vec<Event>,
-        buses: Vec<sonara_model::Bus>,
+        buses: Vec<Bus>,
         snapshots: Vec<Snapshot>,
         clips: Vec<Clip>,
         resume_slots: Vec<ResumeSlot>,
@@ -726,6 +739,7 @@ impl SonaraRuntime {
         }
 
         for bus in buses {
+            self.buses.insert(bus.id, bus.clone());
             self.bus_volumes.entry(bus.id).or_insert(bus.default_volume);
         }
 
@@ -808,6 +822,11 @@ impl SonaraRuntime {
     /// 读取一个已加载的 clip 定义。
     pub fn clip(&self, clip_id: ClipId) -> Option<&Clip> {
         self.clips.get(&clip_id)
+    }
+
+    /// 读取一个已加载的 bus 定义。
+    pub fn bus(&self, bus_id: BusId) -> Option<&Bus> {
+        self.buses.get(&bus_id)
     }
 
     /// 读取一个已加载的记忆槽定义。
@@ -1695,24 +1714,67 @@ impl SonaraRuntime {
         self.snapshots.insert(snapshot.id, snapshot);
     }
 
+    /// 设置某个 bus 当前的 live gain。
+    pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), RuntimeError> {
+        let bus_gain = self
+            .bus_volumes
+            .get_mut(&bus_id)
+            .ok_or(RuntimeError::BusNotLoaded(bus_id))?;
+        *bus_gain = gain.max(0.0);
+        Ok(())
+    }
+
+    /// 读取当前某个 bus 的 live gain。
+    pub fn bus_gain(&self, bus_id: BusId) -> Option<f32> {
+        self.bus_volumes.get(&bus_id).copied()
+    }
+
     /// 读取当前某个 bus 的目标音量。
     pub fn bus_volume(&self, bus_id: BusId) -> Option<f32> {
-        self.bus_volumes.get(&bus_id).copied()
+        self.bus_gain(bus_id)
+    }
+
+    /// 读取某个事件实例当前命中的默认 bus。
+    pub fn active_event_bus(&self, instance_id: EventInstanceId) -> Option<BusId> {
+        let instance = self.active_instances.get(&instance_id)?;
+        let event = self.events.get(&instance.event_id)?;
+        event.default_bus
+    }
+
+    /// 读取某个事件实例当前命中的默认 bus 音量。
+    ///
+    /// 如果事件没有默认 bus，则返回 `1.0`。
+    pub fn active_bus_gain(&self, instance_id: EventInstanceId) -> Option<f32> {
+        Some(
+            self.active_event_bus(instance_id)
+                .and_then(|bus_id| self.bus_gain(bus_id))
+                .unwrap_or(1.0),
+        )
     }
 
     /// 读取某个事件实例当前命中的默认 bus 音量。
     ///
     /// 如果事件没有默认 bus，则返回 `1.0`。
     pub fn active_bus_volume(&self, instance_id: EventInstanceId) -> Option<f32> {
-        let instance = self.active_instances.get(&instance_id)?;
-        let event = self.events.get(&instance.event_id)?;
+        self.active_bus_gain(instance_id)
+    }
 
-        Some(
-            event
-                .default_bus
-                .and_then(|bus_id| self.bus_volume(bus_id))
-                .unwrap_or(1.0),
-        )
+    /// 读取音乐会话中某个 track 当前声明的输出 bus。
+    pub fn music_track_output_bus(
+        &self,
+        session_id: MusicSessionId,
+        track_id: TrackId,
+    ) -> Result<Option<BusId>, RuntimeError> {
+        let session = self
+            .music_sessions
+            .get(&session_id)
+            .ok_or(RuntimeError::MusicSessionNotFound(session_id))?;
+        let graph = self
+            .music_graphs
+            .get(&session.graph_id)
+            .ok_or(RuntimeError::MusicGraphNotLoaded(session.graph_id))?;
+
+        Ok(graph.track(track_id).and_then(|track| track.output_bus))
     }
 
     /// 设置 emitter 参数
@@ -1751,7 +1813,8 @@ impl SonaraRuntime {
         let snapshot = self
             .snapshots
             .get(&snapshot_id)
-            .ok_or(RuntimeError::SnapshotNotLoaded(snapshot_id))?;
+            .ok_or(RuntimeError::SnapshotNotLoaded(snapshot_id))?
+            .clone();
         let mut overrides = HashMap::with_capacity(snapshot.targets.len());
 
         for target in &snapshot.targets {
@@ -1759,7 +1822,7 @@ impl SonaraRuntime {
                 return Err(RuntimeError::SnapshotTargetBusNotFound(target.bus_id));
             }
 
-            self.bus_volumes.insert(target.bus_id, target.target_volume);
+            self.set_bus_gain(target.bus_id, target.target_volume)?;
             overrides.insert(target.bus_id, target.target_volume);
         }
 
@@ -2042,10 +2105,10 @@ fn find_next_matching_cue_in_clip(
 mod tests {
     use smol_str::SmolStr;
     use sonara_model::{
-        CuePoint, EdgeTrigger, EntryPolicy, EventContentRoot, EventKind, MemoryPolicy, MusicEdge,
-        MusicGraph, MusicNode, MusicNodeId, PlaybackTarget, ResumeSlot, SamplerNode, SequenceNode,
-        Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain, TimeRange,
-        Track, TrackBinding, TrackGroup, TrackGroupMode, TrackRole,
+        Bus, CuePoint, EdgeTrigger, EntryPolicy, EventContentRoot, EventKind, MemoryPolicy,
+        MusicEdge, MusicGraph, MusicNode, MusicNodeId, PlaybackTarget, ResumeSlot, SamplerNode,
+        SequenceNode, Snapshot, SnapshotTarget, SpatialMode, SwitchCase, SwitchNode, SyncDomain,
+        TimeRange, Track, TrackBinding, TrackGroup, TrackGroupMode, TrackRole,
     };
 
     use super::*;
@@ -3765,6 +3828,46 @@ mod tests {
     }
 
     #[test]
+    fn set_bus_gain_rejects_unknown_bus() {
+        let mut runtime = SonaraRuntime::new();
+
+        assert!(matches!(
+            runtime.set_bus_gain(BusId::new(), 0.5),
+            Err(RuntimeError::BusNotLoaded(_))
+        ));
+    }
+
+    #[test]
+    fn set_bus_gain_updates_existing_event_bus_lookup() {
+        let event_id = EventId::new();
+        let asset_id = Uuid::now_v7();
+        let bus_id = BusId::new();
+        let (sampler_id, sampler) = make_sampler(asset_id);
+        let mut event = make_event(event_id, sampler_id, vec![sampler]);
+        event.default_bus = Some(bus_id);
+
+        let mut bank = Bank::new("core");
+        bank.objects.events.push(event_id);
+        bank.objects.buses.push(bus_id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank(bank, vec![event.clone()])
+            .expect("bank should load");
+
+        let instance_id = runtime.play(event.id).expect("event should play");
+        assert_eq!(runtime.active_event_bus(instance_id), Some(bus_id));
+        assert_eq!(runtime.active_bus_gain(instance_id), Some(1.0));
+
+        runtime
+            .set_bus_gain(bus_id, 0.35)
+            .expect("bus gain should update");
+
+        assert_eq!(runtime.bus_gain(bus_id), Some(0.35));
+        assert_eq!(runtime.active_bus_gain(instance_id), Some(0.35));
+    }
+
+    #[test]
     fn active_bus_volume_follows_event_default_bus_override() {
         let event_id = EventId::new();
         let asset_id = Uuid::now_v7();
@@ -3800,5 +3903,61 @@ mod tests {
         let instance_id = runtime.play(event.id).expect("event should play");
 
         assert_eq!(runtime.active_bus_volume(instance_id), Some(0.4));
+    }
+
+    #[test]
+    fn music_track_output_bus_resolves_from_active_session() {
+        let asset_id = Uuid::now_v7();
+        let bus = Bus::new("music");
+        let clip = Clip::new("explore", asset_id);
+        let mut track = Track::new("music_main", TrackRole::Main);
+        track.output_bus = Some(bus.id);
+        let node_id = MusicNodeId::new();
+        let mut graph = MusicGraph::new("music");
+        graph.initial_node = Some(node_id);
+        graph.tracks.push(track.clone());
+        graph.nodes.push(MusicNode {
+            id: node_id,
+            name: "explore".into(),
+            bindings: vec![TrackBinding {
+                track_id: track.id,
+                target: PlaybackTarget::Clip { clip_id: clip.id },
+            }],
+            memory_slot: None,
+            memory_policy: MemoryPolicy::default(),
+            default_entry: EntryPolicy::ClipStart,
+            externally_targetable: true,
+            completion_source: Some(track.id),
+        });
+
+        let mut bank = Bank::new("core");
+        bank.objects.buses.push(bus.id);
+        bank.objects.clips.push(clip.id);
+        bank.objects.music_graphs.push(graph.id);
+
+        let mut runtime = SonaraRuntime::new();
+        runtime
+            .load_bank_with_definitions(
+                bank,
+                Vec::new(),
+                vec![bus.clone()],
+                Vec::new(),
+                vec![clip],
+                Vec::new(),
+                Vec::new(),
+                vec![graph.clone()],
+            )
+            .expect("bank should load");
+
+        let session_id = runtime
+            .play_music_graph(graph.id)
+            .expect("music graph should start");
+
+        assert_eq!(
+            runtime
+                .music_track_output_bus(session_id, track.id)
+                .expect("track output bus should resolve"),
+            Some(bus.id)
+        );
     }
 }

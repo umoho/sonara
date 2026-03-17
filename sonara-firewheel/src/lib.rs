@@ -21,7 +21,7 @@ use firewheel_pool::{NewWorkerError, SamplerPoolVolumePan, WorkerID};
 use firewheel_symphonium::{DecodedAudio, load_audio_file};
 use sonara_build::{BuildError, CompiledBankPackage};
 use sonara_model::{
-    AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, Clip, ClipId, Event, EventId,
+    AudioAsset, Bank, BankAsset, BankId, BankManifest, Bus, BusId, Clip, ClipId, Event, EventId,
     MusicGraph, MusicGraphId, MusicNodeId, ParameterId, ParameterValue, ResumeSlot, Snapshot,
     SyncDomain, TrackGroupId, TrackId,
 };
@@ -129,6 +129,7 @@ pub struct FirewheelBackend {
     streaming_asset_rx: mpsc::Receiver<StreamingAssetLoadResult>,
     instance_workers: HashMap<EventInstanceId, Vec<WorkerID>>,
     worker_instances: HashMap<WorkerID, EventInstanceId>,
+    worker_buses: HashMap<WorkerID, BusId>,
     music_session_workers: HashMap<MusicSessionId, Vec<WorkerID>>,
     music_session_track_workers: HashMap<MusicSessionId, HashMap<TrackId, Vec<WorkerID>>>,
     worker_music_sessions: HashMap<WorkerID, MusicSessionId>,
@@ -176,6 +177,7 @@ impl FirewheelBackend {
             streaming_asset_rx,
             instance_workers: HashMap::new(),
             worker_instances: HashMap::new(),
+            worker_buses: HashMap::new(),
             music_session_workers: HashMap::new(),
             music_session_track_workers: HashMap::new(),
             worker_music_sessions: HashMap::new(),
@@ -516,6 +518,14 @@ impl FirewheelBackend {
         Ok(())
     }
 
+    /// 设置某个 bus 的 live gain。
+    pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), FirewheelBackendError> {
+        self.runtime.set_bus_gain(bus_id, gain)?;
+        let _ = self.sync_live_bus_gains();
+        self.update()?;
+        Ok(())
+    }
+
     /// 排队一个全局参数更新请求
     pub fn queue_set_global_param(&mut self, parameter_id: ParameterId, value: ParameterValue) {
         self.command_buffer
@@ -791,6 +801,11 @@ impl FirewheelBackend {
         self.start_ready_pending_playbacks()?;
         self.start_ready_pending_music_playbacks()?;
         self.refresh_waiting_exit_cues()?;
+        if self.sync_live_bus_gains() {
+            self.context
+                .update()
+                .map_err(|error| FirewheelBackendError::Update(format!("{error:?}")))?;
+        }
         let poll_result = self.sampler_pool.poll(&self.context);
         for worker_id in poll_result.finished_workers {
             self.finish_worker(worker_id);
@@ -837,11 +852,17 @@ impl FirewheelBackend {
         }
 
         self.pending_playbacks.remove(&instance_id);
-        self.instance_workers.remove(&instance_id);
-        let bus_volume = self.runtime.active_bus_volume(instance_id).unwrap_or(1.0);
+        if let Some(worker_ids) = self.instance_workers.remove(&instance_id) {
+            for worker_id in worker_ids {
+                self.worker_instances.remove(&worker_id);
+                self.worker_buses.remove(&worker_id);
+            }
+        }
+        let bus_id = self.runtime.active_event_bus(instance_id);
+        let bus_volume = self.runtime.active_bus_gain(instance_id).unwrap_or(1.0);
 
         for asset_id in &plan.asset_ids {
-            self.play_asset(instance_id, *asset_id, bus_volume, None, None)?;
+            self.play_asset(instance_id, *asset_id, bus_id, bus_volume, None, None)?;
         }
 
         self.update()?;
@@ -1085,9 +1106,14 @@ impl FirewheelBackend {
         resolved: ResolvedClipPlayback,
         schedule_internal_stop: bool,
     ) -> Result<(), FirewheelBackendError> {
+        let bus_id = self.runtime.music_track_output_bus(session_id, track_id)?;
+        let bus_volume = bus_id
+            .and_then(|bus_id| self.runtime.bus_gain(bus_id))
+            .unwrap_or(1.0);
         let worker_id = self.play_clip_worker(
             resolved.asset_id,
-            1.0,
+            bus_id,
+            bus_volume,
             resolved.start_from_seconds,
             resolved.repeat_mode,
             None,
@@ -1184,6 +1210,7 @@ impl FirewheelBackend {
     fn play_clip_worker(
         &mut self,
         asset_id: Uuid,
+        bus_id: Option<BusId>,
         bus_volume: f32,
         start_from_seconds: f64,
         repeat_mode: RepeatMode,
@@ -1220,6 +1247,8 @@ impl FirewheelBackend {
             self.finish_worker(old_worker_id);
         }
 
+        self.bind_worker_to_bus(worker.worker_id, bus_id);
+
         Ok(worker.worker_id)
     }
 
@@ -1227,6 +1256,7 @@ impl FirewheelBackend {
         &mut self,
         instance_id: EventInstanceId,
         asset_id: Uuid,
+        bus_id: Option<BusId>,
         bus_volume: f32,
         start_from_seconds: Option<f64>,
         start_time: Option<EventInstant>,
@@ -1262,6 +1292,7 @@ impl FirewheelBackend {
             },
         )?;
         self.attach_worker(instance_id, worker.worker_id);
+        self.bind_worker_to_bus(worker.worker_id, bus_id);
 
         if let Some(old_worker_id) = worker.old_worker_id {
             self.finish_worker(old_worker_id);
@@ -1631,6 +1662,30 @@ impl FirewheelBackend {
             == Some(&self.resolved_music_playbacks_by_track(playbacks))
     }
 
+    fn bind_worker_to_bus(&mut self, worker_id: WorkerID, bus_id: Option<BusId>) {
+        if let Some(bus_id) = bus_id {
+            self.worker_buses.insert(worker_id, bus_id);
+        } else {
+            self.worker_buses.remove(&worker_id);
+        }
+    }
+
+    fn sync_live_bus_gains(&mut self) -> bool {
+        let bindings: Vec<_> = self
+            .worker_buses
+            .iter()
+            .map(|(worker_id, bus_id)| (*worker_id, *bus_id))
+            .collect();
+        let mut changed = false;
+
+        for (worker_id, bus_id) in bindings {
+            let target_gain = self.runtime.bus_gain(bus_id).unwrap_or(1.0);
+            changed |= self.set_worker_volume_linear(worker_id, target_gain, 0.0, None);
+        }
+
+        changed
+    }
+
     fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
         self.worker_instances.insert(worker_id, instance_id);
         self.instance_workers
@@ -1774,6 +1829,7 @@ impl FirewheelBackend {
             .unwrap_or_default();
         for worker_id in worker_ids {
             self.worker_instances.remove(&worker_id);
+            self.worker_buses.remove(&worker_id);
             self.stop_worker(worker_id, fade_seconds);
         }
     }
@@ -1787,6 +1843,7 @@ impl FirewheelBackend {
         for worker_id in worker_ids {
             self.worker_music_sessions.remove(&worker_id);
             self.worker_music_tracks.remove(&worker_id);
+            self.worker_buses.remove(&worker_id);
             self.stop_worker(worker_id, fade_seconds);
         }
     }
@@ -1813,6 +1870,7 @@ impl FirewheelBackend {
         for worker_id in worker_ids_to_stop {
             self.worker_music_sessions.remove(&worker_id);
             let removed_track_id = self.worker_music_tracks.remove(&worker_id);
+            self.worker_buses.remove(&worker_id);
 
             if let Some(track_id) = removed_track_id {
                 if let Some(workers_by_track) =
@@ -1857,9 +1915,17 @@ impl FirewheelBackend {
             return false;
         };
 
+        let target_volume_linear = volume_linear.max(0.0);
+        let target_smooth_seconds = smooth_seconds.max(0.0) as f32;
+        if (fx_state.fx_chain.volume_pan.volume.linear() - target_volume_linear).abs() <= 0.0001
+            && (fx_state.fx_chain.volume_pan.smooth_seconds - target_smooth_seconds).abs() <= 0.0001
+        {
+            return false;
+        }
+
         let mut params = fx_state.fx_chain.volume_pan;
-        params.smooth_seconds = smooth_seconds.max(0.0) as f32;
-        params.set_volume_linear(volume_linear.max(0.0));
+        params.smooth_seconds = target_smooth_seconds;
+        params.set_volume_linear(target_volume_linear);
         fx_state
             .fx_chain
             .set_params(params, start_time, &fx_state.node_ids, &mut self.context);
@@ -1888,6 +1954,7 @@ impl FirewheelBackend {
         }
 
         if let Some(instance_id) = self.worker_instances.remove(&worker_id) {
+            self.worker_buses.remove(&worker_id);
             if let Some(worker_ids) = self.instance_workers.get_mut(&instance_id) {
                 worker_ids.retain(|id| *id != worker_id);
 
@@ -1903,6 +1970,7 @@ impl FirewheelBackend {
         let Some(session_id) = self.worker_music_sessions.remove(&worker_id) else {
             return;
         };
+        self.worker_buses.remove(&worker_id);
         let mut bridge_finished = false;
         let removed_track_id = self.worker_music_tracks.remove(&worker_id);
 

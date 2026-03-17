@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::{ClipId, MusicGraphId, MusicNodeId, ResumeSlotId, TrackGroupId, TrackId};
+use crate::{BusId, ClipId, MusicGraphId, MusicNodeId, ResumeSlotId, TrackGroupId, TrackId};
 
 fn default_true() -> bool {
     true
@@ -137,6 +137,8 @@ pub struct Track {
     pub role: TrackRole,
     #[serde(default)]
     pub group: Option<TrackGroupId>,
+    #[serde(default)]
+    pub output_bus: Option<BusId>,
 }
 
 impl Track {
@@ -147,6 +149,7 @@ impl Track {
             name: name.into(),
             role,
             group: None,
+            output_bus: None,
         }
     }
 }

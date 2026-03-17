@@ -7,8 +7,8 @@ use bevy_ecs::prelude::{Component, NonSendMut};
 use sonara_build::CompiledBankPackage;
 use sonara_firewheel::{FirewheelBackend, FirewheelBackendError};
 use sonara_model::{
-    Bank, BankId, Bus, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId, ParameterId,
-    ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
+    Bank, BankId, Bus, BusId, Clip, Event, EventId, MusicGraph, MusicGraphId, MusicNodeId,
+    ParameterId, ParameterValue, ResumeSlot, Snapshot, SnapshotId, SyncDomain, TrackGroupId,
 };
 use sonara_runtime::{
     AudioCommandOutcome, EmitterId, EventInstanceId, Fade, PlaybackPlan, QueuedRuntime,
@@ -290,6 +290,16 @@ impl SonaraAudio {
             SonaraBackend::Firewheel(backend) => {
                 backend.set_global_param(parameter_id, value)?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// 设置某个 bus 的 live gain。
+    pub fn set_bus_gain(&mut self, bus_id: BusId, gain: f32) -> Result<(), AudioBackendError> {
+        match &mut self.backend {
+            SonaraBackend::Runtime(runtime) => runtime.set_bus_gain(bus_id, gain)?,
+            SonaraBackend::Firewheel(backend) => backend.set_bus_gain(bus_id, gain)?,
         }
 
         Ok(())
