@@ -43,6 +43,7 @@ pub struct FirewheelBackend {
     pub(crate) instance_workers: HashMap<EventInstanceId, Vec<WorkerID>>,
     pub(crate) worker_instances: HashMap<WorkerID, EventInstanceId>,
     pub(crate) worker_buses: HashMap<WorkerID, BusId>,
+    pub(crate) bus_effect_retry_frames: HashMap<BusId, u8>,
     pub(crate) music_session_workers: HashMap<MusicSessionId, Vec<WorkerID>>,
     pub(crate) music_session_track_workers:
         HashMap<MusicSessionId, HashMap<TrackId, Vec<WorkerID>>>,
@@ -52,7 +53,10 @@ pub struct FirewheelBackend {
     pub(crate) active_music_tracks: HashMap<MusicSessionId, Option<TrackId>>,
     pub(crate) active_music_binding_clips: HashMap<MusicSessionId, HashMap<TrackId, ClipId>>,
     pub(crate) command_buffer: RuntimeCommandBuffer,
+    pub(crate) debug_effect_trace_frames: u8,
 }
+
+const BUS_EFFECT_RETRY_FRAMES: u8 = 8;
 
 impl FirewheelBackend {
     /// 使用现有运行时创建后端, 并立即启动默认输出流
@@ -92,6 +96,7 @@ impl FirewheelBackend {
             instance_workers: HashMap::new(),
             worker_instances: HashMap::new(),
             worker_buses: HashMap::new(),
+            bus_effect_retry_frames: HashMap::new(),
             music_session_workers: HashMap::new(),
             music_session_track_workers: HashMap::new(),
             worker_music_sessions: HashMap::new(),
@@ -100,6 +105,7 @@ impl FirewheelBackend {
             active_music_tracks: HashMap::new(),
             active_music_binding_clips: HashMap::new(),
             command_buffer: RuntimeCommandBuffer::new(),
+            debug_effect_trace_frames: 0,
         })
     }
 
@@ -138,8 +144,13 @@ impl FirewheelBackend {
         slot: BusEffectSlot,
     ) -> Result<(), FirewheelBackendError> {
         self.runtime.set_bus_effect_slot(bus_id, slot)?;
+        self.bus_effect_retry_frames
+            .insert(bus_id, BUS_EFFECT_RETRY_FRAMES);
+        self.debug_effect_trace_frames = 8;
         let _ = self.sync_live_bus_effects();
+        self.debug_log_bus_low_pass_state(bus_id, "set_bus_effect_slot:after_sync_before_update");
         self.update()?;
+        self.debug_log_bus_low_pass_state(bus_id, "set_bus_effect_slot:after_update");
         Ok(())
     }
 
@@ -218,6 +229,14 @@ impl FirewheelBackend {
         self.refresh_waiting_exit_cues()?;
         let bus_gains_changed = self.sync_live_bus_gains();
         let bus_effects_changed = self.sync_live_bus_effects();
+        if self.debug_effect_trace_frames > 0 {
+            println!(
+                "[firewheel] effect_trace: frames_left={} bus_effects_changed={}",
+                self.debug_effect_trace_frames, bus_effects_changed
+            );
+            self.debug_log_music_worker_low_pass_targets("update");
+            self.debug_effect_trace_frames -= 1;
+        }
         if bus_gains_changed || bus_effects_changed {
             self.context
                 .update()

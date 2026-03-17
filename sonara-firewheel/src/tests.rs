@@ -314,3 +314,62 @@ fn live_bus_low_pass_updates_existing_music_worker() {
         .expect("music worker should still expose fx chain state");
     assert!(!fx_state.fx_chain.low_pass.enabled);
 }
+
+#[test]
+fn live_bus_low_pass_retries_after_target_change() {
+    let mut backend = FirewheelBackend::new(Default::default())
+        .expect("firewheel backend should start for local regression test");
+
+    let asset_id = Uuid::now_v7();
+    backend
+        .register_interleaved_f32_asset(asset_id, 1, 48_000, vec![0.0; 48_000])
+        .expect("synthetic sample should register");
+
+    let mut bus = Bus::new("music_underwater");
+    let mut dry_slot = BusEffectSlot::low_pass(650.0);
+    dry_slot
+        .low_pass_effect_mut()
+        .expect("slot should be low-pass")
+        .enabled = false;
+    bus.effect_slots.push(dry_slot.clone());
+
+    let mut clip = Clip::new("shop_loop", asset_id);
+    clip.loop_range = Some(TimeRange::new(0.0, 60.0));
+    let graph = make_loop_graph(bus.clone(), clip.clone());
+
+    let mut bank = Bank::new("music_underwater");
+    bank.objects.buses.push(bus.id);
+    bank.objects.clips.push(clip.id);
+    bank.objects.music_graphs.push(graph.id);
+
+    backend
+        .load_bank_with_definitions(
+            bank,
+            Vec::new(),
+            vec![bus.clone()],
+            Vec::new(),
+            vec![clip],
+            Vec::new(),
+            Vec::new(),
+            vec![graph.clone()],
+        )
+        .expect("bank should load");
+
+    backend
+        .play_music_graph(graph.id)
+        .expect("music graph should play");
+
+    let mut wet_slot = dry_slot.clone();
+    wet_slot
+        .low_pass_effect_mut()
+        .expect("slot should be low-pass")
+        .enabled = true;
+    backend
+        .set_bus_effect_slot(bus.id, wet_slot)
+        .expect("wet low-pass should update");
+
+    assert!(
+        backend.sync_live_bus_effects(),
+        "changed bus effect should keep retrying for a few updates"
+    );
+}

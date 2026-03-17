@@ -68,6 +68,28 @@ impl SonaraFxChain {
             &mut cx.event_queue_scheduled(node_id, time),
         );
     }
+
+    pub(crate) fn resend_low_pass_params<B: AudioBackend>(
+        &mut self,
+        params: FastLowpassStereoNode,
+        time: Option<EventInstant>,
+        node_ids: &[NodeID],
+        cx: &mut FirewheelCtx<B>,
+    ) {
+        let node_id = node_ids[1];
+        let mut resend_baseline = params;
+        resend_baseline.enabled = !params.enabled;
+        resend_baseline.cutoff_hz = if params.cutoff_hz <= 20.5 {
+            params.cutoff_hz + 1.0
+        } else {
+            params.cutoff_hz - 1.0
+        };
+        resend_baseline.diff(
+            &params,
+            PathBuilder::default(),
+            &mut cx.event_queue_scheduled(node_id, time),
+        );
+    }
 }
 
 impl FxChain for SonaraFxChain {

@@ -138,12 +138,29 @@ impl FirewheelBackend {
             .iter()
             .map(|(worker_id, bus_id)| (*worker_id, *bus_id))
             .collect();
+        let retrying_buses: HashSet<_> = self
+            .bus_effect_retry_frames
+            .iter()
+            .filter_map(|(bus_id, frames_left)| (*frames_left > 0).then_some(*bus_id))
+            .collect();
         let mut changed = false;
 
         for (worker_id, bus_id) in bindings {
-            changed |=
-                self.set_worker_low_pass(worker_id, self.bus_low_pass_node(Some(bus_id)), None);
+            let force_resend = retrying_buses.contains(&bus_id);
+            changed |= self.set_worker_low_pass(
+                worker_id,
+                self.bus_low_pass_node(Some(bus_id)),
+                None,
+                force_resend,
+            );
         }
+
+        self.bus_effect_retry_frames.retain(|_, frames_left| {
+            if *frames_left > 0 {
+                *frames_left -= 1;
+            }
+            *frames_left > 0
+        });
 
         changed
     }
@@ -167,6 +184,98 @@ impl FirewheelBackend {
 
         apply_low_pass_effect(&mut node, effect);
         node
+    }
+
+    pub(crate) fn debug_log_bus_low_pass_state(&self, bus_id: BusId, reason: &str) {
+        let target = self.bus_low_pass_node(Some(bus_id));
+        println!(
+            "[firewheel] bus_low_pass_state: reason={} bus={:?} target_enabled={} target_cutoff_hz={:.1}",
+            reason, bus_id, target.enabled, target.cutoff_hz
+        );
+
+        let bindings: Vec<_> = self
+            .worker_buses
+            .iter()
+            .filter_map(|(worker_id, worker_bus_id)| {
+                (*worker_bus_id == bus_id).then_some(*worker_id)
+            })
+            .collect();
+
+        if bindings.is_empty() {
+            println!(
+                "[firewheel] bus_low_pass_state: bus={:?} has no bound workers",
+                bus_id
+            );
+            return;
+        }
+
+        for worker_id in bindings {
+            let Some(fx_state) = self.sampler_pool.fx_chain(worker_id) else {
+                println!(
+                    "[firewheel] bus_low_pass_state: worker={:?} has no fx_chain state",
+                    worker_id
+                );
+                continue;
+            };
+
+            let current = fx_state.fx_chain.low_pass;
+            if let Some(instance_id) = self.worker_instances.get(&worker_id) {
+                println!(
+                    "[firewheel] bus_low_pass_state: worker={:?} kind=event instance={:?} current_enabled={} current_cutoff_hz={:.1}",
+                    worker_id, instance_id, current.enabled, current.cutoff_hz
+                );
+                continue;
+            }
+
+            if let Some(session_id) = self.worker_music_sessions.get(&worker_id) {
+                let track_id = self.worker_music_tracks.get(&worker_id).copied();
+                println!(
+                    "[firewheel] bus_low_pass_state: worker={:?} kind=music session={:?} track={:?} current_enabled={} current_cutoff_hz={:.1}",
+                    worker_id, session_id, track_id, current.enabled, current.cutoff_hz
+                );
+                continue;
+            }
+
+            println!(
+                "[firewheel] bus_low_pass_state: worker={:?} kind=unknown current_enabled={} current_cutoff_hz={:.1}",
+                worker_id, current.enabled, current.cutoff_hz
+            );
+        }
+    }
+
+    pub(crate) fn debug_log_music_worker_low_pass_targets(&self, reason: &str) {
+        if self.music_session_workers.is_empty() {
+            println!(
+                "[firewheel] music_worker_low_pass_targets: reason={} no_music_workers",
+                reason
+            );
+            return;
+        }
+
+        for (session_id, worker_ids) in &self.music_session_workers {
+            for worker_id in worker_ids {
+                let Some(track_id) = self.worker_music_tracks.get(worker_id).copied() else {
+                    continue;
+                };
+                let bus_id = self.worker_buses.get(worker_id).copied();
+                let target = self.bus_low_pass_node(bus_id);
+                let current = self
+                    .sampler_pool
+                    .fx_chain(*worker_id)
+                    .map(|fx_state| fx_state.fx_chain.low_pass);
+                println!(
+                    "[firewheel] music_worker_low_pass_targets: reason={} session={:?} worker={:?} track={:?} bus={:?} current={:?} target_enabled={} target_cutoff_hz={:.1}",
+                    reason,
+                    session_id,
+                    worker_id,
+                    track_id,
+                    bus_id,
+                    current,
+                    target.enabled,
+                    target.cutoff_hz
+                );
+            }
+        }
     }
 
     pub(crate) fn attach_worker(&mut self, instance_id: EventInstanceId, worker_id: WorkerID) {
@@ -439,12 +548,37 @@ impl FirewheelBackend {
         worker_id: WorkerID,
         params: FastLowpassStereoNode,
         start_time: Option<EventInstant>,
+        force_resend: bool,
     ) -> bool {
         let Some(fx_state) = self.sampler_pool.fx_chain_mut(worker_id) else {
             return false;
         };
 
+        let previous = fx_state.fx_chain.low_pass;
         if fx_state.fx_chain.low_pass == params {
+            if force_resend {
+                fx_state.fx_chain.resend_low_pass_params(
+                    params,
+                    start_time,
+                    &fx_state.node_ids,
+                    &mut self.context,
+                );
+                println!(
+                    "[firewheel] worker_low_pass_resend: worker={:?} enabled={} cutoff_hz={:.1}",
+                    worker_id, params.enabled, params.cutoff_hz
+                );
+                return true;
+            }
+            if self.debug_effect_trace_frames > 0 {
+                println!(
+                    "[firewheel] worker_low_pass_skip: worker={:?} cached_enabled={} cached_cutoff_hz={:.1} target_enabled={} target_cutoff_hz={:.1}",
+                    worker_id,
+                    previous.enabled,
+                    previous.cutoff_hz,
+                    params.enabled,
+                    params.cutoff_hz
+                );
+            }
             return false;
         }
 
@@ -455,6 +589,10 @@ impl FirewheelBackend {
             &mut self.context,
         );
         fx_state.fx_chain.low_pass = params;
+        println!(
+            "[firewheel] worker_low_pass_update: worker={:?} prev_enabled={} prev_cutoff_hz={:.1} next_enabled={} next_cutoff_hz={:.1}",
+            worker_id, previous.enabled, previous.cutoff_hz, params.enabled, params.cutoff_hz
+        );
         true
     }
 

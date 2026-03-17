@@ -107,8 +107,29 @@ fn build_demo() -> DemoConfig {
 #[derive(Resource, Default)]
 struct DemoState {
     session_id: Option<MusicSessionId>,
-    inside_water: bool,
+    detected_inside_water: bool,
+    applied_wet: bool,
+    override_mode: WetOverrideMode,
+    player_position: Vec3,
     hud_text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum WetOverrideMode {
+    #[default]
+    Auto,
+    ForceDry,
+    ForceWet,
+}
+
+impl WetOverrideMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::ForceDry => "force dry",
+            Self::ForceWet => "force wet",
+        }
+    }
 }
 
 #[derive(Component)]
@@ -148,6 +169,10 @@ fn setup_scene(
         audio
             .play_music_graph(demo.graph.id)
             .expect("underwater music graph should start"),
+    );
+    println!(
+        "[underwater_music] startup: graph={:?} bus={:?} session={:?} clip={:?} source=private_assets/underwater/Shop_Loop.wav",
+        demo.graph.id, demo.music_bus.id, state.session_id, demo.clip.id
     );
     refresh_hud_text(&audio, &demo, &mut state);
 
@@ -287,36 +312,79 @@ fn update_underwater_music(
     mut audio: NonSendMut<SonaraAudio>,
     demo: Res<DemoConfig>,
     mut state: ResMut<DemoState>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     player_query: Query<&Transform, With<Player>>,
 ) {
     let Ok(player_transform) = player_query.single() else {
         return;
     };
 
-    let inside_water = player_transform.translation.xz().length() <= WATER_RADIUS;
-    if inside_water != state.inside_water {
-        state.inside_water = inside_water;
+    state.player_position = player_transform.translation;
+
+    if keyboard.just_pressed(KeyCode::Digit0) {
+        state.override_mode = WetOverrideMode::Auto;
+        println!("[underwater_music] override: mode=auto");
+    }
+    if keyboard.just_pressed(KeyCode::Digit1) {
+        state.override_mode = WetOverrideMode::ForceDry;
+        println!("[underwater_music] override: mode=force_dry");
+    }
+    if keyboard.just_pressed(KeyCode::Digit2) {
+        state.override_mode = WetOverrideMode::ForceWet;
+        println!("[underwater_music] override: mode=force_wet");
+    }
+
+    let detected_inside_water = player_transform.translation.xz().length() <= WATER_RADIUS;
+    state.detected_inside_water = detected_inside_water;
+    let apply_wet = match state.override_mode {
+        WetOverrideMode::Auto => detected_inside_water,
+        WetOverrideMode::ForceDry => false,
+        WetOverrideMode::ForceWet => true,
+    };
+
+    if apply_wet != state.applied_wet {
+        state.applied_wet = apply_wet;
 
         let mut low_pass_slot = demo.low_pass_slot.clone();
         let low_pass = low_pass_slot
             .low_pass_effect_mut()
             .expect("demo low-pass slot should be editable");
-        low_pass.enabled = inside_water;
+        low_pass.enabled = apply_wet;
         low_pass.set_cutoff_hz(UNDERWATER_CUTOFF_HZ);
 
         audio
             .set_bus_gain(
                 demo.music_bus.id,
-                if inside_water {
-                    UNDERWATER_BUS_GAIN
-                } else {
-                    1.0
-                },
+                if apply_wet { UNDERWATER_BUS_GAIN } else { 1.0 },
             )
             .expect("music bus gain should update");
         audio
             .set_bus_effect_slot(demo.music_bus.id, low_pass_slot)
             .expect("music bus effect slot should update");
+
+        let playhead = state
+            .session_id
+            .and_then(|session_id| audio.music_session_playhead_seconds(session_id))
+            .unwrap_or(0.0);
+        let phase = state
+            .session_id
+            .and_then(|session_id| audio.music_status(session_id).ok())
+            .map(|status| status.phase)
+            .unwrap_or(MusicPhase::Stopped);
+        println!(
+            "[underwater_music] transition: detected_inside_water={} applied_wet={} override_mode={} pos=({:.2}, {:.2}, {:.2}) gain={:.2} low_pass_enabled={} cutoff_hz={:.1} phase={:?} playhead={:.2}",
+            detected_inside_water,
+            apply_wet,
+            state.override_mode.label(),
+            player_transform.translation.x,
+            player_transform.translation.y,
+            player_transform.translation.z,
+            if apply_wet { UNDERWATER_BUS_GAIN } else { 1.0 },
+            apply_wet,
+            UNDERWATER_CUTOFF_HZ,
+            phase,
+            playhead
+        );
     }
 
     refresh_hud_text(&audio, &demo, &mut state);
@@ -335,18 +403,31 @@ fn refresh_hud_text(audio: &SonaraAudio, demo: &DemoConfig, state: &mut DemoStat
         .music_status(session_id)
         .map(|status| status.phase)
         .unwrap_or(MusicPhase::Stopped);
-
-    state.hud_text = if state.inside_water {
-        format!(
-            "Sonara underwater_music\n\nWASD / arrow keys move the listener proxy\ncentral blue disk = underwater zone\nmusic source: private_assets/underwater/Shop_Loop.wav\n\nenvironment: underwater\nmusic bus gain: {UNDERWATER_BUS_GAIN:.2}\nlow-pass: {} Hz\nsession phase: {:?}\nplayhead seconds: {:.2}\nbus id: {:?}",
-            UNDERWATER_CUTOFF_HZ as i32, phase, playhead, demo.music_bus.id
+    let (environment_label, gain_label, low_pass_label) = if state.applied_wet {
+        (
+            "underwater",
+            format!("{UNDERWATER_BUS_GAIN:.2}"),
+            format!("{} Hz", UNDERWATER_CUTOFF_HZ as i32),
         )
     } else {
-        format!(
-            "Sonara underwater_music\n\nWASD / arrow keys move the listener proxy\ncentral blue disk = underwater zone\nmusic source: private_assets/underwater/Shop_Loop.wav\n\nenvironment: surface\nmusic bus gain: 1.00\nlow-pass: off\nsession phase: {:?}\nplayhead seconds: {:.2}\nbus id: {:?}",
-            phase, playhead, demo.music_bus.id
-        )
+        ("surface", "1.00".into(), "off".into())
     };
+
+    state.hud_text = format!(
+        "Sonara underwater_music\n\nWASD / arrow keys move the listener proxy\n0 = auto | 1 = force dry | 2 = force wet\ncentral blue disk = underwater zone\nmusic source: private_assets/underwater/Shop_Loop.wav\n\nenvironment: {}\ndetected_inside_water: {}\napplied_wet: {}\noverride_mode: {}\nposition: ({:.2}, {:.2}, {:.2})\nmusic bus gain: {}\nlow-pass: {}\nsession phase: {:?}\nplayhead seconds: {:.2}\nbus id: {:?}",
+        environment_label,
+        state.detected_inside_water,
+        state.applied_wet,
+        state.override_mode.label(),
+        state.player_position.x,
+        state.player_position.y,
+        state.player_position.z,
+        gain_label,
+        low_pass_label,
+        phase,
+        playhead,
+        demo.music_bus.id
+    );
 }
 
 fn sync_hud_text(state: Res<DemoState>, mut hud_query: Query<&mut Text, With<HudText>>) {
